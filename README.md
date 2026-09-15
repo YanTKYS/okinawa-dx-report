@@ -30,9 +30,36 @@
 詳細は [`docs/okinawa-city-dx-report.md`](docs/okinawa-city-dx-report.md) の「12. 調査上の限界」および
 [`docs/sources.md`](docs/sources.md) の「アクセス制約ログ」を参照。
 
+## 閲覧用ページ（GitHub Pages）
+
+CSVやレポートを個別に開かなくても、**`index.html` を開くだけ**で調査の全体像と進捗を数分で把握できる。
+
+- **GitHub Pages**：リポジトリの Settings → Pages で公開ブランチを指定すると `index.html` がそのまま配信される
+- **ローカル確認**：リポジトリのルートで `python3 -m http.server 8000` を実行し <http://localhost:8000/> を開く
+  （`index.html` を `file://` で直接開くと、ブラウザのセキュリティ制限によりCSVを読み込めない）
+
+ページは **`data/` 配下のCSVを読み込んで描画している**。数値やサマリーをHTMLに直接書き込んではいない。
+したがって **CSVを更新すれば、ページの表示・集計・分析も自動的に更新される**。
+DX担当人数・人口・職員数・DXスコアが入力されれば、散布図・相関係数・類似規模自治体比較が
+HTMLを書き換えることなく自動的に有効になる。
+
+ページ構成：1. 結論・サマリー → 2. 現時点で分かること → 3. DX推進体制マップ →
+4. 人的体制×DX推進度 → 5. 相関係数 → 6. 市別比較表 → 7. データ充足度 → 8. 情報確度 → 9. 根拠資料
+
+静的HTML/CSS/JavaScriptのみで構成し、ビルド処理・フレームワーク・外部CDNには依存しない。
+ブラウザの印刷／PDF保存にも対応している（`@media print`）。
+
+**表示上の原則**：`不明`・`未評価` を 0 として計算せず、推測値でグラフを埋めることもしない。
+相関分析に必要なデータが不足している場合は「相関なし」ではなく
+**「データ不足により評価不能」**と明示し、あと何が分かれば検証できるかを表示する。
+
 ## ファイル構成
 
 ```
+index.html                    閲覧用ページ（GitHub Pages のエントリポイント）
+assets/
+  style.css                   スタイル（印刷用レイアウトを含む）
+  app.js                      CSV読み込み・集計・相関分析・描画
 docs/
   okinawa-city-dx-report.md   最終レポート本体（12章構成）
   methodology.md              調査設計・評価基準・相関分析手順（採点前に凍結）
@@ -48,7 +75,13 @@ data/
 1. `data/evidence.csv` の `verification_status` が `未検証` の行を対象に、記載された `source_url` を開く
 2. 値を確認して `value` を更新し、`confidence` を A/B/C で付与、`verification_status` を `検証済` に変更
 3. `docs/methodology.md` の評価基準に従って採点する（**基準は変更しないこと**）
-4. `data/municipalities.csv` を更新し、相関分析を実施する
+4. `data/municipalities.csv` の該当列（`population`／`total_staff`／`dx_staff`／
+   `dx_dedicated_staff`／`dx_score` 等）に数値を入力する
+5. ページを再読み込みすると、散布図・相関係数・ランキング・類似規模自治体比較が自動的に表示される
+   （HTMLの修正は不要）
+
+入力時の注意：**確認できない値は「不明」のままにすること。** 0 を入れてはならない。
+`index.html` は「不明」を欠損として扱い、集計・相関から除外したうえで除外件数を表示する。
 
 ## 調査時点
 
