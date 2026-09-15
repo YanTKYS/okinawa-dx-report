@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>沖縄県内11市 DX推進体制比較</title>
-<meta name="description" content="沖縄県内11市のDX推進体制と、人的体制・DX推進度の関係を把握するための比較ページ。data/配下のCSVを読み込んで表示します。">
+<meta name="description" content="沖縄県内11市のDX・情報関係業務担当職員数とDX推進度の関係を比較する資料。data/配下のCSVから自動生成。">
 <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
@@ -13,130 +13,147 @@
   <div class="wrap">
     <h1>沖縄県内11市 DX推進体制比較</h1>
     <p class="sub">
-      DX推進部署・業務改善部署の人的体制と、DX推進状況との関係を把握するための比較資料　
-      <b>調査時点：2026年9月15日（令和8年9月15日）</b>　
-      <span class="no-print">表示内容は <code>data/municipalities.csv</code> ほかCSVから自動生成</span>
+      DX・情報関係業務の人的体制と、DX推進状況との関係を把握するための比較資料　
+      <b>人員データ基準日：2024年4月1日（総務省）／DX推進度評価時点：2026年9月15日</b>
+      <span class="no-print">　表示内容は <code>data/</code> 配下のCSVから自動生成</span>
     </p>
   </div>
 </header>
 
 <nav class="toc no-print">
   <ol>
-    <li><a href="#s-summary">1. 結論・サマリー</a></li>
-    <li><a href="#s-findings">2. 現時点で分かること</a></li>
-    <li><a href="#s-map">3. DX推進体制マップ</a></li>
-    <li><a href="#s-analysis">4. 人的体制 × DX推進度</a></li>
-    <li><a href="#s-corr">5. 相関係数</a></li>
-    <li><a href="#s-table">6. 市別比較表</a></li>
-    <li><a href="#s-cov">7. データ充足度</a></li>
-    <li><a href="#s-conf">8. 情報確度</a></li>
-    <li><a href="#s-ev">9. 根拠資料</a></li>
+    <li><a href="#s-summary">1. 結論</a></li>
+    <li><a href="#s-staff">2. 人的体制</a></li>
+    <li><a href="#s-score">3. DX推進度</a></li>
+    <li><a href="#s-analysis">4. 相関分析</a></li>
+    <li><a href="#s-focus">5. 糸満市の位置</a></li>
+    <li><a href="#s-pairs">6. 類似規模市の比較</a></li>
+    <li><a href="#s-typology">7. 組織類型</a></li>
+    <li><a href="#s-table">8. 市別比較表</a></li>
+    <li><a href="#s-cov">9. データ充足度</a></li>
+    <li><a href="#s-ev">10. 根拠資料</a></li>
   </ol>
 </nav>
 
 <main class="wrap">
-
   <div id="loaderr" class="banner err hidden"></div>
-
   <div id="content">
 
-    <!-- 1 ---------------------------------------------------------------- -->
+    <!-- 1 --------------------------------------------------------------- -->
     <section id="s-summary">
-      <h2><span class="idx">1</span>結論・サマリー</h2>
-      <p class="lede">本調査の仮説は「DXを専門的に推進する組織の人的体制が充実している自治体ほど、DX推進が進んでいるのではないか」。正の相関・無相関・負の相関のいずれもあり得るものとして検証している。</p>
-
-      <div class="banner">
-        <h3>現時点の結論：仮説は検証できていない（データ不足による評価不能）</h3>
-        <p>調査を実施した環境から対象11市の公式サイト・沖縄県・総務省等へのアクセスが遮断され、<b>一次資料を取得できなかった</b>。最重要変数である<b>DX担当職員数は11市すべてで未確認</b>であり、DX推進度も未採点である。</p>
-        <p>これは「相関がなかった」という分析結果ではない。<b>推測による数値の補完は一切行っていない</b>ため、判定に必要なデータが揃っていないという状態である。詳細は <a href="docs/okinawa-city-dx-report.md">調査レポート</a>／<a href="docs/sources.md">出典・アクセス制約ログ</a>。</p>
-      </div>
+      <h2><span class="idx">1</span>結論</h2>
+      <p class="lede">検証仮説：<b>DX・業務改善を担う人的体制が厚い自治体ほど、DX推進が進んでいるのではないか。</b>正の関係・無関係・負の関係のいずれもあり得るものとして検証している。</p>
 
       <div class="kpis" id="kpis"></div>
       <div class="kpis" style="grid-template-columns:1fr;margin-top:12px"><div class="kpi" id="readiness"></div></div>
-      <p class="hint">値はすべて <code>data/municipalities.csv</code> から算出しており、ページ内に数値のハードコードはない。CSVを更新すれば本ページの表示・分析も自動的に更新される。</p>
+
+      <div class="banner" style="margin-top:18px">
+        <p><b>主指標について。</b>「DX・情報関係業務担当職員数」は、総務省「令和6年度 自治体DX・情報化推進概要」における<b>「DX推進担当課室・情報政策担当課室」の合計人数</b>（基準日2024年4月1日）である。情報政策担当を含むため <b>DX専任人数とは異なる</b>。同一定義・同一基準日で県内各市を比較できる唯一の共通指標であるため、主分析に用いている。</p>
+        <p><b>本分析はラグ分析である。</b>人員は2024年4月1日時点、DX推進度は2026年9月15日時点の公開状況で評価している。同時点の比較ではない。逆因果（DXが進んだから人員を増やした）の影響を多少避けられる可能性はあるが、<b>因果関係を証明するものではない</b>。</p>
+      </div>
+
+      <div class="findings" id="conclusion" style="margin-top:18px"></div>
     </section>
 
-    <!-- 2 ---------------------------------------------------------------- -->
-    <section id="s-findings">
-      <h2><span class="idx">2</span>現時点で分かること</h2>
-      <p class="lede">長文レポートの要約ではなく、CSVから機械的に読み取れる内容に絞っている。左が事実、右が読み方の注意。</p>
-      <div class="findings" id="findings"></div>
+    <!-- 2 --------------------------------------------------------------- -->
+    <section id="s-staff">
+      <h2><span class="idx">2</span>人的体制</h2>
+      <p class="lede">主分析は総務省の共通指標（広義）。補助分析は自治体公表資料から職務別に分離できた狭義の人数。<b>両者は定義が異なるため合算・比較しない。</b></p>
+
+      <h3>主指標：DX・情報関係業務担当職員数（総務省・広義・2024年4月1日）</h3>
+      <p class="hint no-print">総務省調査における「DX推進担当課室・情報政策担当課室」の合計人数。DX専任人数ではない。
+        <label class="toggle" style="margin-left:14px"><input type="checkbox" id="focusToggle" checked> 糸満市を強調表示</label></p>
+      <div class="tablewrap" id="staffMain"></div>
+
+      <h3>補助指標：職務別に分離できた狭義の人数（自治体公表組織図）</h3>
+      <p class="hint">確認できた市のみ表示。年度が市により異なる点に注意。浦添市の行政改革推進課はDXとBPRが一体の組織であり、<b>DX実人数とBPR実人数へ按分していない</b>。</p>
+      <div class="tablewrap" id="staffSub"></div>
     </section>
 
-    <!-- 3 ---------------------------------------------------------------- -->
-    <section id="s-map">
-      <h2><span class="idx">3</span>DX推進体制マップ</h2>
-      <p class="lede">11市を組織体制で分類。カードには最小限の項目のみ表示し、その他は「詳細」から展開する。</p>
-      <p class="maplegend">
-        <b>機能区分</b>：DX企画機能と情報システム運用機能が別組織か（<b>機能分離型</b>）、同一組織か（<b>機能一体型</b>）。
-        機能一体型では部署の職員数をそのままDX担当人数として扱えないため、人員データを読むうえで決定的に重要な区別である。
-        <label class="toggle no-print" style="margin-left:14px"><input type="checkbox" id="focusToggle" checked> 糸満市を強調表示</label>
-      </p>
-      <div id="map"></div>
-      <p class="hint" id="peernote"></p>
+    <!-- 3 --------------------------------------------------------------- -->
+    <section id="s-score">
+      <h2><span class="idx">3</span>DX推進度の採点</h2>
+      <p class="lede">2026年9月15日に凍結した評価基準（6軸21項目・100点満点）で採点。基準は結果に合わせて変更していない。</p>
+      <div class="banner">
+        <p><b>確度A・Bの一次資料根拠がある項目だけを採点している</b>（methodology §5）。根拠を確認できない項目は素点0点とし「未確認」として扱うが、<b>これは「取り組んでいない」ことを意味しない</b>。</p>
+        <p>その結果、<b>全11市が未確認率80%以上</b>となった。凍結ルール（未確認率30%超は主分析から除外）により、現時点で主分析の対象となる市は存在しない。<b>人員側のデータは揃ったが、DX推進度側の確認が追いついていない</b>のが現状である。</p>
+      </div>
+      <div class="tablewrap" id="scoreTable"></div>
+      <h3>評価軸ごとの確認密度</h3>
+      <p class="hint">11市合計で、どの評価軸がどれだけ確認できているか。低い軸ほど追加調査の優先度が高い。</p>
+      <div class="tablewrap" id="axisBreak"></div>
     </section>
 
-    <!-- 4 ---------------------------------------------------------------- -->
+    <!-- 4 --------------------------------------------------------------- -->
     <section id="s-analysis">
-      <h2><span class="idx">4</span>人的体制 × DX推進度</h2>
-      <p class="lede">本調査の中心。人的体制の指標とDX推進度スコアの関係を表示する。必要な数値が揃わない間は、空のグラフではなく不足状況を表示する。</p>
+      <h2><span class="idx">4</span>人的体制 × DX推進度（相関分析）</h2>
+      <p class="lede">主分析は未確認率30%以下の市のみ。感度分析は参考値の市も含めた全市。</p>
       <div class="controls no-print">
         <div><label for="metricSel">横軸（人的体制）</label><select id="metricSel"></select></div>
         <div><label for="scoreSel">縦軸（DX推進度）</label>
-          <select id="scoreSel">
-            <option value="_score">素点スコア</option>
-            <option value="_scoreA">補正スコア（未確認項目で正規化）</option>
-          </select></div>
+          <select id="scoreSel"><option value="_score">素点スコア（raw）</option><option value="_scoreA">補正スコア（adjusted）</option></select></div>
+        <div><label for="scopeSel">分析範囲</label>
+          <select id="scopeSel"><option value="sensitivity">感度分析（参考値を含む全市）</option><option value="main">主分析（未確認率30%以下）</option></select></div>
       </div>
       <div id="analysisBox"></div>
-    </section>
 
-    <!-- 5 ---------------------------------------------------------------- -->
-    <section id="s-corr">
-      <h2><span class="idx">5</span>相関係数</h2>
-      <p class="lede">データが揃った場合のみ算出する。算出時は必ず分析対象数 n と欠損除外数を併記する。</p>
-      <div class="banner">
-        <p><b>相関と因果は異なる。</b>仮に有意な相関が得られても「人を増やせばDXが進むことが証明された」とは言えない。逆の因果（DXが進んだ結果として体制が拡充された）や、人口規模・財政規模・外部委託・首長方針といった交絡要因も同程度に整合的である。</p>
-        <p>また対象は11市と小規模であり、<b>n=11 での Spearman ρ の有意水準5%（両側）の臨界値は約0.618</b>、中程度の相関を検出する力は0.3未満である。<b>有意でないことは「関係がない」ことを意味しない。</b></p>
+      <div class="banner" style="margin-top:18px">
+        <p><b>相関は因果を意味しない。</b>係数が得られても「人を増やせばDXが進むことが証明された」とは言えない。逆の因果や、人口規模・財政規模・外部委託・首長方針といった交絡要因も同程度に整合的である。</p>
+        <p><b>現時点の係数は参考値である。</b>DX推進度の未確認率が全市で80%を超えているため、スコアは各市の取り組みの実態ではなく<b>調査の到達度</b>を強く反映している。人員が多い市ほど低スコアに見える場合でも、それは「人員が多いほどDXが遅れている」ことを意味しない。</p>
+        <p>対象は最大11市であり、<b>n=8での有意水準5%（両側）の臨界値は r = 0.707、ρ = 0.738</b>。これを下回る係数は統計的に有意ではない。有意でないことは「関係がない」ことを意味しない（検出力不足）。</p>
       </div>
-      <div class="corrgrid" id="corrgrid"></div>
+      <div class="corrgrid" id="corrgrid" style="margin-top:14px"></div>
+      <p class="tmeta">レポート作成時点の分析結果は <code>data/analysis_results.csv</code> に保存している。上の表示はCSVからの再計算値。</p>
     </section>
 
-    <!-- 6 ---------------------------------------------------------------- -->
+    <!-- 5 --------------------------------------------------------------- -->
+    <section id="s-focus">
+      <h2><span class="idx">5</span>糸満市の相対的位置</h2>
+      <p class="lede">順位付けが目的ではなく、人員配置を検討するための相対的位置の確認。評価ロジックは他市と同一で、糸満市だけを有利・不利に扱う処理はしていない。</p>
+      <div id="focusBox"></div>
+    </section>
+
+    <!-- 6 --------------------------------------------------------------- -->
+    <section id="s-pairs">
+      <h2><span class="idx">6</span>類似規模市の比較</h2>
+      <p class="lede">methodology §9.6 で事前登録した比較ペア。結果に合わせて組み替えていない。</p>
+      <div id="pairs"></div>
+    </section>
+
+    <!-- 7 --------------------------------------------------------------- -->
+    <section id="s-typology">
+      <h2><span class="idx">7</span>組織類型</h2>
+      <p class="lede">人数だけでなく組織構造の違いを見る。新たな恣意的スコアは作らず、CSVの組織情報から機械的に分類している。</p>
+      <div id="typology"></div>
+      <p class="hint" id="typonote"></p>
+    </section>
+
+    <!-- 8 --------------------------------------------------------------- -->
     <section id="s-table">
-      <h2><span class="idx">6</span>市別比較表</h2>
+      <h2><span class="idx">8</span>市別比較表</h2>
       <p class="lede">列見出しをクリックで並べ替え。「不明」は欠損として扱い、0とは区別して常に末尾に配置する。</p>
       <div class="controls no-print">
         <div><label for="tsearch">市名・部署名検索</label><input type="search" id="tsearch" placeholder="例：糸満"></div>
         <div><label for="tfilter">絞り込み</label><select id="tfilter"></select></div>
       </div>
-      <div class="tablewrap">
-        <table><thead id="thead"></thead><tbody id="tbody"></tbody></table>
-      </div>
+      <div class="tablewrap"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
       <p class="tmeta" id="tmeta"></p>
     </section>
 
-    <!-- 7 ---------------------------------------------------------------- -->
+    <!-- 9 --------------------------------------------------------------- -->
     <section id="s-cov">
-      <h2><span class="idx">7</span>データ充足度</h2>
-      <p class="lede">どの市の何がまだ調査不足なのかを一覧する。本調査では「データがない」こと自体が重要な結果である。</p>
-      <div class="tablewrap">
-        <table class="cov"><thead id="covhead"></thead><tbody id="covbody"></tbody></table>
-      </div>
+      <h2><span class="idx">9</span>データ充足度と情報確度</h2>
+      <p class="lede">どの市の何がまだ不足しているか。「データがない」こと自体が重要な結果である。</p>
+      <div class="tablewrap"><table class="cov"><thead id="covhead"></thead><tbody id="covbody"></tbody></table></div>
       <p class="tmeta" id="covmeta"></p>
-    </section>
-
-    <!-- 8 ---------------------------------------------------------------- -->
-    <section id="s-conf">
-      <h2><span class="idx">8</span>情報確度</h2>
-      <p class="lede">各データの確からしさの区分。記号にマウスを乗せると定義が表示される。</p>
+      <h3>情報確度の区分</h3>
       <div class="legend" id="legend"></div>
       <p class="confdist" id="confdist"></p>
     </section>
 
-    <!-- 9 ---------------------------------------------------------------- -->
+    <!-- 10 -------------------------------------------------------------- -->
     <section id="s-ev">
-      <h2><span class="idx">9</span>根拠資料</h2>
+      <h2><span class="idx">10</span>根拠資料</h2>
       <p class="lede">市名をクリックすると、その市のデータの根拠資料（<code>data/evidence.csv</code>）を展開表示する。</p>
       <div id="evlist"></div>
     </section>
@@ -150,12 +167,13 @@
     <p>
       <a href="docs/okinawa-city-dx-report.md">調査レポート本体</a>
       <a href="docs/methodology.md">調査方法・評価基準</a>
-      <a href="docs/sources.md">出典・アクセス制約ログ</a>
+      <a href="docs/sources.md">出典一覧</a>
       <a href="data/municipalities.csv">municipalities.csv</a>
+      <a href="data/scoring_results.csv">scoring_results.csv</a>
+      <a href="data/analysis_results.csv">analysis_results.csv</a>
       <a href="data/evidence.csv">evidence.csv</a>
-      <a href="data/scoring_rubric.csv">scoring_rubric.csv</a>
     </p>
-    <p>本ページは静的HTML/CSS/JavaScriptのみで構成され、ビルド処理・外部ライブラリ・CDNに依存しない。表示内容はすべて <code>data/</code> 配下のCSVから生成される。</p>
+    <p>静的HTML/CSS/JavaScriptのみで構成。ビルド処理・フレームワーク・外部CDNに依存しない。表示内容はすべて <code>data/</code> 配下のCSVから生成される。</p>
   </div>
 </footer>
 
