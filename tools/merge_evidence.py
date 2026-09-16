@@ -4,11 +4,13 @@
    - 「所在を特定した」「要確認」段階のものはA/Bにしない
    - 既存の同一事項の行は重複追加せず、supersede 注記で新行を指す
 """
-import csv, io, os
+import csv, io, os, re
 ROOT=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 P=os.path.join(ROOT,'data','evidence.csv')
-rows=list(csv.DictReader(io.open(P,encoding='utf-8')))
-H=list(rows[0].keys())
+_all=list(csv.DictReader(io.open(P,encoding='utf-8')))
+H=list(_all[0].keys())
+# 冪等化: 本スクリプトが生成する D/S 系の行は毎回作り直す
+rows=[r for r in _all if not re.match(r'^[DS]\d+$', r['evidence_id'])]
 CD='2026-09-16'
 SZIP='https://www.soumu.go.jp/main_content/001048599.zip'
 SNAME='令和6年度 自治体DX・情報化推進概要 個別資料【R06個別資料】（１）自治体DXの推進体制等（市区町村）.xlsx'
@@ -121,7 +123,35 @@ sup={'E402':'D042','E101':'D020','E102':'D021','E701':'D056','E903':'D050','E902
      'E301':'D052','E302':'D053','E602':'D054','E501':'D055','E1101':'D057','E107':'D024'}
 for r in rows:
     if r['evidence_id'] in sup:
-        r['note']=(r['note']+' ／ ').strip()+'※%s で一次資料確認済（確度更新）'%sup[r['evidence_id']]
+        mark='※%s で一次資料確認済（確度更新）'%sup[r['evidence_id']]
+        if mark not in r['note']:
+            r['note']=(r['note']+' ／ ').strip()+mark
+
+# --- 採点根拠（S系）: 凍結ルーブリックで確定した項目を evidence へ正式統合 --------
+#     Deep Research 本文の得点候補は使わず、tools/scoring_facts.py で
+#     証拠 → ルーブリック条件 → 点数 の順に正式化した結果だけを取り込む。
+import sys
+sys.path.insert(0, os.path.join(ROOT,'tools'))
+from scoring_facts import FACTS, MUNIS
+rubric=list(csv.DictReader(io.open(os.path.join(ROOT,'data','scoring_rubric.csv'),encoding='utf-8')))
+RMAX={r['item_id']:float(r['max_points']) for r in rubric}
+RNAME={r['item_id']:r['item_name'] for r in rubric}
+ORDER=[r['item_id'] for r in rubric]
+sn=0
+for m in MUNIS:
+    for iid in ORDER:
+        f=FACTS.get((m,iid))
+        if f is None: continue
+        sn+=1
+        pts=f['points']; mx=RMAX[iid]
+        st='満点' if pts>=mx else ('部分点' if pts>0 else '確認済み0点')
+        new.append(R('S%03d'%sn, m, '%s_%s'%(iid,RNAME[iid]), '%g/%g点・%s'%(pts,mx,st),
+            f['source_title'], m if not f['source_url'].startswith('https://www.soumu') and
+            not f['source_url'].startswith('https://www.digital') and
+            not f['source_url'].startswith('https://www.lg-waps') else '総務省・デジタル庁等',
+            f['source_url'], '9_採点根拠', '不明', f['confidence'],
+            '検証済（第1〜5回DRの証拠をルーブリックで再判定）',
+            '%s ／ 判定理由: %s' % (f['evidence'], f['note'])))
 
 out=rows+new
 with io.open(P,'w',encoding='utf-8',newline='') as f:
