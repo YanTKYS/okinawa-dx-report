@@ -18,7 +18,8 @@ var DATA_FILES = {
   scoring:        'data/scoring_results.csv'
 };
 
-var MAIN_MIN_N = 3;          /* 主分析の散布図を描く最小対象数（methodology §9.1） */
+var MIN_N_CALC = 3;   /* 相関を算出できる最小の対 */
+var MIN_N_MAIN = 6;   /* methodology §9.1 が望ましいとした水準。これ未満は「探索的」と表示し主分析と呼ばない */
 
 var FOCUS_CITY = '糸満市';   /* 本調査の利用主体。強調のみで、評価・統計処理は一切変えない */
 
@@ -152,12 +153,18 @@ function derive(rows){
     r._infoDept = num(r.info_policy_dept_staff);
     r._combined = num(r.dx_bpr_combined_staff);
     r._ext      = num(r.external_dx_staff);
-    /* 庁内実態ベースの実働体制。広義人員とは定義が異なるため必ず別変数で保持する。 */
-    r._fieldTeam = num(r.field_team_staff);
 
     /* スコア */
     r._score  = num(r.dx_score);
     r._scoreA = num(r.dx_score_adjusted);
+    /* 実装成果スコア（主分析の被説明変数）。説明変数と構成概念が重複する
+       体制系項目（I-3・IV-1・V-1〜V-3 等）を除いた部分尺度。 */
+    r._impl   = num(r.impl_score);
+    r._implA  = num(r.impl_score_adjusted);
+    r._implMax   = num(r.impl_max_points);
+    r._implJudge = num(r.impl_judgeable_points);
+    r._implRate  = num(r.impl_unconfirmed_rate);
+    r._implEligible = (String(r.impl_main_analysis_eligible||'').indexOf('該当') === 0);
     r._judge  = num(r.judgeable_points);
     r._unconfPts = num(r.unconfirmed_points);
     r._unconfRate= num(r.unconfirmed_rate);
@@ -214,15 +221,55 @@ function rankAvg(arr){
   return ranks;
 }
 function spearman(xs, ys){ if(xs.length < 3) return null; return pearson(rankAvg(xs), rankAvg(ys)); }
+
+/* Fisher z変換による95%信頼区間（methodology §9.2 で事前登録）。
+   Pearson  SE = 1/sqrt(n-3) ／ Spearman SE = sqrt(1.06/(n-3))（Bonett–Wright）。
+   n が小さいほど区間は極端に広くなる。区間が0をまたぐ場合、符号すら確定していない。 */
+function fisherCI(coef, n, kind){
+  if(coef === null || coef === undefined || n < 4) return null;
+  var c = Math.max(Math.min(coef, 0.999999), -0.999999);
+  var z = Math.atanh ? Math.atanh(c) : 0.5 * Math.log((1+c)/(1-c));
+  var se = (kind === 'pearson') ? 1/Math.sqrt(n-3) : Math.sqrt(1.06/(n-3));
+  function th(x){ return Math.tanh ? Math.tanh(x) : (Math.exp(2*x)-1)/(Math.exp(2*x)+1); }
+  return [th(z - 1.959964*se), th(z + 1.959964*se)];
+}
+function ciText(ci){
+  if(!ci) return 'n&lt;4のため算出不能';
+  return '95%CI [' + ci[0].toFixed(3) + ', ' + ci[1].toFixed(3) + ']' +
+         ((ci[0] < 0 && ci[1] > 0) ? '（0をまたぐ）' : '');
+}
+/* n に応じた分析の位置づけ。n<6 を「主分析」とは呼ばない。 */
+function tierLabel(n, scope){
+  if(n < MIN_N_CALC) return '算出不能';
+  if(scope === 'main') return (n < MIN_N_MAIN) ? '探索的（n&lt;' + MIN_N_MAIN + '）' : '主分析';
+  return '感度分析（参考値）';
+}
 function critical(tbl, n){ if(n < 5) return null; return tbl[n] !== undefined ? tbl[n] : (n > 15 ? tbl[15] : null); }
 
-/* 指標の対を作る。scope='main' は未確認率30%以下の市に限る（methodology §6） */
+/* 被説明変数ごとの定義。主分析は実装成果スコアのみ。
+   総合100点スコアは説明変数（人的・組織体制）と構成概念が重複する項目
+   （I-3 推進本部・IV-1 BPR専管組織・V-2 外部人材・V-3 人材採用配置 等）を含むため、
+   人員数と相関させると採点設計に由来する相関が構造的に生じうる。感度分析に限定する。 */
+var OUTCOMES = {
+  '_impl':  {raw:'_impl',  adj:'_implA',  elig:'_implEligible', main:true,
+             label:'実装成果スコア（II+III+IV-2+VI・60点）',
+             rateKey:'_implRate', axis:'実装成果スコア'},
+  '_score': {raw:'_score', adj:'_scoreA', elig:'_eligible',     main:false,
+             label:'総合DXスコア（21項目・100点）',
+             rateKey:'_unconfRate', axis:'総合DXスコア'}
+};
+function outcomeOf(yKey){
+  return (yKey === '_scoreA' || yKey === '_score') ? OUTCOMES['_score'] : OUTCOMES['_impl'];
+}
+
+/* 指標の対を作る。scope='main' は当該被説明変数の未確認率30%以下の市に限る（methodology §6） */
 function pairsFor(xKey, yKey, scope){
   var used = [], excluded = [], refOnly = [];
+  var eligKey = outcomeOf(yKey).elig;
   STATE.muni.forEach(function(r){
     var hasVals = !(r[xKey] === null || r[xKey] === undefined ||
                     r[yKey] === null || r[yKey] === undefined);
-    if(scope === 'main' && !r._eligible){
+    if(scope === 'main' && !r[eligKey]){
       /* 未確認率30%超。統計には入れないが、参考値として薄く表示できるよう分けて返す */
       if(hasVals) refOnly.push(r);
       excluded.push(r); return;
@@ -297,14 +344,16 @@ function joinNames(a){
   return a.map(function(n){ return n === FOCUS_CITY ? '<b>' + esc(n) + '</b>' : esc(n); }).join('、');
 }
 
-/* 主分析に使う既定の相関（絶対人数 × raw score） */
-function headline(scope){
-  var p = pairsFor('_dxinfo', '_score', scope);
+/* 既定の相関：広義絶対人数 × 実装成果スコア（主分析の被説明変数） */
+function headline(scope, yKey){
+  yKey = yKey || '_impl';
+  var p = pairsFor('_dxinfo', yKey, scope);
   var xs = p.used.map(function(r){ return r._dxinfo; });
-  var ys = p.used.map(function(r){ return r._score; });
-  return {n:p.used.length, ex:p.excluded.length,
-          r:pearson(xs,ys), rho:spearman(xs,ys),
-          rc:critical(R_CRIT,p.used.length), rhoc:critical(RHO_CRIT,p.used.length)};
+  var ys = p.used.map(function(r){ return r[yKey]; });
+  var n = p.used.length, r = pearson(xs,ys), rho = spearman(xs,ys);
+  return {n:n, ex:p.excluded.length, r:r, rho:rho,
+          rci:fisherCI(r,n,'pearson'), rhoci:fisherCI(rho,n,'spearman'),
+          rc:critical(R_CRIT,n), rhoc:critical(RHO_CRIT,n)};
 }
 
 /* ---------- 1. サマリー ---------- */
@@ -313,11 +362,11 @@ function renderSummary(){
   var total = STATE.muni.length;
   var dxinfoKnown = countBy(function(r){ return r._dxinfo !== null; });
   var scored      = countBy(function(r){ return r._score !== null; });
-  var eligible    = countBy(function(r){ return r._eligible; });
+  var eligible    = countBy(function(r){ return r._implEligible; });
   var main = headline('main'), sens = headline('sensitivity');
-  var useMain = (main.n >= MAIN_MIN_N);
+  var useMain = (main.n >= MIN_N_CALC);
   var h = useMain ? main : sens;
-  var srcLabel = useMain ? '主分析' : '感度分析（参考値）';
+  var srcLabel = useMain ? tierLabel(main.n,'main') : '感度分析（参考値）';
 
   function kpi(label, value, note, cls){
     return '<div class="kpi ' + (cls||'') + '"><div class="k-label">' + label + '</div>' +
@@ -331,50 +380,62 @@ function renderSummary(){
         '総務省・同一定義・2024-04-01基準・確度A<br>那覇市・宜野湾市・浦添市は未取得') +
     kpi('DX推進度 採点済み', scored + of, '凍結ルーブリック21項目・100点満点') +
     kpi('主分析 対象', eligible + of,
-        eligible === 0 ? '<b>未確認率30%超のため全市が除外</b>'
-                       : '未確認率30%以下の市（' + esc(names(function(r){ return r._eligible; }).join('、')) + '）',
-        eligible === 0 ? 'alert' : '') +
+        eligible === 0 ? '<b>実装成果スコアの未確認率30%超のため全市が除外</b>'
+                       : '実装成果スコアの未確認率30%以下（' +
+                         esc(names(function(r){ return r._implEligible; }).join('、')) + '）',
+        eligible < MIN_N_CALC ? 'alert' : '') +
     kpi('Pearson r（' + srcLabel + '）', h.r === null ? '算出不能' : h.r.toFixed(3),
-        h.r === null ? '対が' + MAIN_MIN_N + '件未満のため算出していない'
-                     : 'n = ' + h.n + '／' + strengthWord(h.r, h.n, h.rc)) +
+        h.r === null ? '対が' + MIN_N_CALC + '件未満のため算出していない'
+                     : 'n = ' + h.n + '／' + ciText(h.rci)) +
     kpi('Spearman ρ（' + srcLabel + '）', h.rho === null ? '算出不能' : h.rho.toFixed(3),
-        h.rho === null ? '対が' + MAIN_MIN_N + '件未満のため算出していない'
-                       : 'n = ' + h.n + '／' + strengthWord(h.rho, h.n, h.rhoc));
+        h.rho === null ? '対が' + MIN_N_CALC + '件未満のため算出していない'
+                       : 'n = ' + h.n + '／' + ciText(h.rhoci));
 
   /* 現時点の結論（ファーストビュー必須表示） */
   var badge = document.getElementById('readiness');
-  var lackStaff = STATE.muni.filter(function(r){ return r._eligible && r._dxinfo === null; })
+  var lackStaff = STATE.muni.filter(function(r){ return r._implEligible && r._dxinfo === null; })
                             .map(function(r){ return r._name; });
-  if(useMain){
+  if(main.n >= MIN_N_MAIN){
     badge.className = 'kpi';
     badge.innerHTML = '<div class="k-label">現時点の結論（仮説H1：人的体制が厚いほどDXが進んでいる）</div>' +
       '<div class="k-value" style="font-size:17px;padding-top:5px">主分析 n=' + main.n + ' で評価</div>' +
-      '<div class="k-note">Pearson r = ' + (main.r===null?'—':main.r.toFixed(3)) +
-      '／Spearman ρ = ' + (main.rho===null?'—':main.rho.toFixed(3)) + '。' +
-      'n が小さいため検出力は低く、<b>有意でないことは「関係がない」ことを意味しない</b>。</div>';
+      '<div class="k-note">Pearson r = ' + (main.r===null?'—':main.r.toFixed(3)) + '（' + ciText(main.rci) + '）' +
+      '／Spearman ρ = ' + (main.rho===null?'—':main.rho.toFixed(3)) + '（' + ciText(main.rhoci) + '）。' +
+      '<b>有意でないことは「関係がない」ことを意味しない</b>。</div>';
+  }else if(main.n >= MIN_N_CALC){
+    badge.className = 'kpi alert';
+    badge.innerHTML = '<div class="k-label">現時点の結論（仮説H1：人的体制が厚いほどDXが進んでいる）</div>' +
+      '<div class="k-value">探索的な値しか出せない（n = ' + main.n + '）</div>' +
+      '<div class="k-note">methodology §9.1 が望ましいとした n≥' + MIN_N_MAIN +
+      ' に達していないため、<b>主分析とは呼ばない</b>。信頼区間は ' + ciText(main.rci) + '。</div>';
   }else{
     badge.className = 'kpi alert';
     badge.innerHTML = '<div class="k-label">現時点の結論（仮説H1：人的体制が厚いほどDXが進んでいる）</div>' +
       '<div class="k-value">主分析では判定できない（n = ' + main.n + '）</div>' +
-      '<div class="k-note">正式再採点の結果、未確認率30%以下は <b>' + eligible + '市</b>（' +
-      esc(names(function(r){ return r._eligible; }).join('、') || 'なし') + '）。' +
+      '<div class="k-note"><b>被説明変数は実装成果スコア</b>（II行政手続DX＋III内部業務DX＋IV-2 BPR実績＋VI住民サービス／60点）。' +
+      '人的・組織体制そのものを測る項目を外しているため、説明変数との構成概念の重複を避けている。' +
+      'この尺度で未確認率30%以下は <b>' + eligible + '市</b>（' +
+      esc(names(function(r){ return r._implEligible; }).join('、') || 'なし') + '）。' +
       (lackStaff.length
-        ? 'ただし' + (lackStaff.length === eligible ? 'この全市' : esc(lackStaff.join('、'))) +
-          'で総務省の広義人員が未取得であり、<b>スコアが確定した市と人員が確定した市が重なっていない</b>ため対が作れない。'
+        ? 'ただし' + (lackStaff.length === eligible ? 'いずれも' : esc(lackStaff.join('、')) + 'は') +
+          '総務省の広義人員が未取得であり、<b>スコアが確定した市と人員が確定した市が重なっていない</b>ため対が作れない。'
         : '') +
-      '感度分析の値は参考であり、DX推進度の実態ではなく<b>調査の到達度</b>を強く反映している。</div>';
+      '感度分析の値は参考であり、主結論には用いない。</div>';
   }
 }
 
 /* ---------- 2. 結論 ---------- */
 
 function renderConclusion(){
-  var main = headline('main'), sens = headline('sensitivity');
+  var mainI = headline('main','_impl'), sensI = headline('sensitivity','_impl');
+  var sensIA = headline('sensitivity','_implA');
+  var sensT  = headline('sensitivity','_score'), sensTA = headline('sensitivity','_scoreA');
   var total = STATE.muni.length;
   var dxinfoKnown = countBy(function(r){ return r._dxinfo !== null; });
   var popKnown = countBy(function(r){ return r._pop !== null; });
   var staffKnown = countBy(function(r){ return r._staff !== null; });
-  var eligible = names(function(r){ return r._eligible; });
+  var eligT = names(function(r){ return r._eligible; });
+  var eligI = names(function(r){ return r._implEligible; });
   var vals = STATE.muni.filter(function(r){ return r._dxinfo !== null; })
                        .sort(function(a,b){ return b._dxinfo - a._dxinfo; });
   var hi = vals[0], lo = vals[vals.length-1];
@@ -383,21 +444,26 @@ function renderConclusion(){
     if(x.status === '未確認') uncTotal++;
     else if(String(x.status).indexOf('確認済み') !== -1) czTotal++;
   });
-  var scoreSorted = STATE.muni.slice().sort(function(a,b){ return b._score - a._score; });
+  var scoreSorted = STATE.muni.slice().sort(function(a,b){ return b._impl - a._impl; });
 
   var confirmed = [
     '<b>5本のDeep Researchを正式統合し、11市×21項目＝231レコードを凍結ルーブリックで採点し直した。</b>' +
       'Deep Research本文の得点候補（配点超過を含む）は採用せず、<code>data/scoring_rubric.csv</code> のみを正として' +
       '「証拠 → ルーブリック条件 → 点数」の順で判定している。',
-    '<b>素点はトップが' + esc(scoreSorted[0]._name) + ' ' + fmt(scoreSorted[0]._score,1) + '点、' +
-      '最下位が' + esc(scoreSorted[scoreSorted.length-1]._name) + ' ' + fmt(scoreSorted[scoreSorted.length-1]._score,1) + '点。</b>' +
-      '公的資料に「未導入・機能なし・未実施」が明示された<b>確認済み0点は' + czTotal + '件</b>で、' +
-      '単に情報を確認できていない<b>未確認' + uncTotal + '件</b>とは区別して集計している。',
-    '<b>未確認率30%以下（主分析対象）は ' + eligible.length + '市</b>' +
-      (eligible.length ? '（' + esc(eligible.join('、')) + '）' : '') + '。' +
-      '第5回Deep Researchは6市が30%以下になると報告していたが、' +
-      '当該ファイルが末尾で途切れており<b>9市分の項目別根拠が届いていない</b>ため、' +
-      '根拠を確認できた項目だけで再計算するとこの結果になる。',
+    '<b>被説明変数を2層に分けた。</b>主分析は<b>実装成果スコア</b>' +
+      '（II行政手続DX＋III内部業務DX＋IV-2 BPR実績＋VI住民サービス／60点）。' +
+      '総合100点スコアには「全庁的推進本部」「BPR専管組織」「外部専門人材」「デジタル人材の採用・配置」など' +
+      '<b>説明変数（人的・組織体制）と構成概念が重複する項目</b>が含まれ、' +
+      '人員数と相関させると採点設計に由来する相関が構造的に生じうるため、感度分析に限定している。',
+    '<b>実装成果スコアはトップが' + esc(scoreSorted[0]._name) + ' ' + fmt(scoreSorted[0]._impl,1) + '点／60点。</b>' +
+      '未確認率30%以下はこの尺度で <b>' + eligI.length + '市</b>' +
+      (eligI.length ? '（' + esc(eligI.join('、')) + '）' : '') + '、' +
+      '総合スコアでは ' + eligT.length + '市' + (eligT.length ? '（' + esc(eligT.join('、')) + '）' : '') + 'である。',
+    '<b>補集合からの否定推定（旧・導出規則R3）を廃止した。</b>' +
+      '第5回Deep Researchは末尾で途切れており列挙が網羅的である保証が無いため、' +
+      '「取組ありに挙がっていないから0点」とした28レコードを<b>未確認へ差し戻した</b>。' +
+      '確認済み0点は自治体を名指しで「無い／未実施」と報告しているもの' + czTotal + '件のみで、' +
+      '未確認は' + uncTotal + '件である。',
     '<b>DX・情報関係業務担当職員数は ' + dxinfoKnown + '/' + total + '市で確定（確度A・2024年4月1日基準）。</b>' +
       '最多は' + esc(hi._name) + ' ' + hi._dxinfo + '人、最少は' + esc(lo._name) + ' ' + lo._dxinfo + '人。' +
       '那覇市・宜野湾市・浦添市は同一資料に収録されているが値が未取得。',
@@ -406,9 +472,10 @@ function renderConclusion(){
   ];
 
   var implication = [
-    '<b>増員の必要性を先に置いた結論は、現時点のデータからは導けない。</b>' +
-      '主分析の対が作れないため、人数とDX推進度の関係は正・無・負のいずれとも確定していない。',
-    '<b>一方、組織構造の差は事実として確認できる。</b>' +
+    '<b>人数とDX推進度の関係は、正・無・負のいずれとも確定していない。</b>' +
+      '主分析の対が作れず、感度分析の値は主結論に使えない。' +
+      'この仮説が否定されること自体も成果として受け入れる設計にしている。',
+    '<b>組織構造の差は事実として確認できる。</b>' +
       'DX専管組織の有無、DX企画と情報システム運用の分離、BPR専管組織の有無、外部専門人材の任用は11市で明確に分かれており、' +
       '同じ人数でも実質的にDX企画へ充てられる人員は異なる。',
     '<b>総務省の広義人員は「県内で自団体がどの位置にあるか」を同一の物差しで示す材料にはなる。</b>' +
@@ -418,13 +485,12 @@ function renderConclusion(){
   var cannot = [
     '<b>因果関係は主張できない。</b>係数が得られても「人を増やせばDXが進む」とは言えない。' +
       '本分析は2024年度の人員と2026年9月時点のDX推進状況を比較する約2年のラグ分析であり、逆因果を多少避けられる可能性はあるが証明にはならない。',
-    '<b>感度分析の値を主結論に使ってはならない。</b>' +
-      '感度分析（n = ' + sens.n + '、Pearson r = ' + (sens.r===null?'—':sens.r.toFixed(3)) +
-      '／Spearman ρ = ' + (sens.rho===null?'—':sens.rho.toFixed(3)) + '）の対象は全市が未確認率30%超であり、' +
-      'スコアは各市の取り組みの実態ではなく<b>調査の到達度</b>を強く反映している。',
+    '<b>感度分析の値を主結論に使ってはならない。</b>実装成果スコア（n = ' + sensI.n + '）で ' +
+      'Pearson r = ' + (sensI.r===null?'—':sensI.r.toFixed(3)) + ' ' + ciText(sensI.rci) +
+      '、Spearman ρ = ' + (sensI.rho===null?'—':sensI.rho.toFixed(3)) + ' ' + ciText(sensI.rhoci) + '。' +
+      '<b>信頼区間はいずれも0をまたいでおり、符号すら確定していない。</b>',
     '<b>「確認できない」を「実施していない」と読み替えてはならない。</b>' +
-      '未確認' + uncTotal + '件は根拠を確認できていない項目であり、非実施を意味しない。' +
-      '非実施が公的資料で明示された項目は確認済み0点として別に数えている。',
+      '未確認' + uncTotal + '件は根拠を確認できていない項目であり、非実施を意味しない。',
     '<b>有意でないことは「関係がない」ことを意味しない。</b>n が小さいため検出力が低く、中程度の関係があっても検出できない。'
   ];
 
@@ -490,22 +556,29 @@ function renderStaffing(){
 
 function renderScoring(){
   var rows = STATE.muni.slice().sort(function(a,b){
-    if(a._score === null && b._score === null) return a._code - b._code;
-    if(a._score === null) return 1; if(b._score === null) return -1;
-    return b._score - a._score;
+    if(a._impl === null && b._impl === null) return a._code - b._code;
+    if(a._impl === null) return 1; if(b._impl === null) return -1;
+    return b._impl - a._impl;
   });
-  var html = '<table><thead><tr><th class="stick">市</th><th>素点（raw）</th><th>判定可能配点</th>' +
-    '<th>補正スコア（adjusted）</th><th>未確認項目</th><th>未確認率</th><th>主分析</th></tr></thead><tbody>' +
+  var implMax = rows[0] ? rows[0]._implMax : 60;
+  var html = '<table><thead><tr><th class="stick" rowspan="2">市</th>' +
+    '<th colspan="4" style="text-align:center;background:#f4f7fa">主分析の被説明変数：実装成果スコア（' + fmt(implMax,0) + '点）</th>' +
+    '<th colspan="4" style="text-align:center">参考：総合DXスコア（100点）</th></tr>' +
+    '<tr><th>素点</th><th>補正</th><th>未確認率</th><th>主分析</th>' +
+    '<th>素点</th><th>補正</th><th>未確認率</th><th>30%以下</th></tr></thead><tbody>' +
     rows.map(function(r){
-      var cls = r._eligible ? 'ok' : 'miss';
       return '<tr' + (r._isFocus && STATE.focusOn ? ' class="is-focus"' : '') + '>' +
         '<td class="stick">' + esc(r._name) + '</td>' +
-        '<td class="n">' + fmt(r._score,1) + ' <span style="color:var(--muted)">/ 100</span></td>' +
-        '<td class="n">' + fmt(r._judge,0) + '</td>' +
+        '<td class="n" style="background:#f4f7fa">' + fmt(r._impl,1) + '</td>' +
+        '<td class="n' + (r._implA===null?' missing':'') + '" style="background:#f4f7fa">' +
+          (r._implA===null?'算出不能':fmt(r._implA,1)) + '</td>' +
+        '<td class="n" style="background:#f4f7fa">' + fmt(r._implRate,1) + '%</td>' +
+        '<td style="background:#f4f7fa"><span class="chip ' + (r._implEligible?'ok':'miss') + '">' +
+          esc(txt(r.impl_main_analysis_eligible)) + '</span></td>' +
+        '<td class="n">' + fmt(r._score,1) + '</td>' +
         '<td class="n' + (r._scoreA===null?' missing':'') + '">' + (r._scoreA===null?'算出不能':fmt(r._scoreA,1)) + '</td>' +
-        '<td class="n">' + esc(txt(r.unconfirmed_items)) + ' / ' + STATE.rubric.length + '項目</td>' +
         '<td class="n">' + fmt(r._unconfRate,1) + '%</td>' +
-        '<td><span class="chip ' + cls + '">' + esc(txt(r.main_analysis_eligible)) + '</span></td></tr>';
+        '<td><span class="chip ' + (r._eligible?'ok':'miss') + '">' + (r._eligible?'該当':'除外') + '</span></td></tr>';
     }).join('') + '</tbody></table>';
   document.getElementById('scoreTable').innerHTML = html;
 
@@ -517,15 +590,31 @@ function renderScoring(){
     if(axes[s.axis_name]) axes[s.axis_name].got += parseFloat(s.points || 0);
   });
   var nCity = STATE.muni.length;
+  var scaleSet = {};
+  STATE.scoring.forEach(function(x){
+    if(!x.scale) return;
+    scaleSet[x.axis_name] = scaleSet[x.axis_name] || {};
+    scaleSet[x.axis_name][x.scale] = true;
+  });
+  var scaleOf = {};
+  Object.keys(scaleSet).forEach(function(k){
+    var ks = Object.keys(scaleSet[k]).sort();
+    scaleOf[k] = ks.length > 1 ? '実装成果＋体制' : ks[0];
+  });
   document.getElementById('axisBreak').innerHTML =
-    '<table><thead><tr><th>評価軸</th><th>配点</th><th>11市合計で確認できた得点</th><th>確認密度</th></tr></thead><tbody>' +
+    '<table><thead><tr><th>評価軸</th><th>尺度</th><th>配点</th><th>11市合計で確認できた得点</th><th>確認密度</th></tr></thead><tbody>' +
     Object.keys(axes).map(function(k){
       var a = axes[k], denom = a.max * nCity, pct = denom ? a.got/denom*100 : 0;
-      return '<tr><td>' + esc(k) + '</td><td class="n">' + fmt(a.max,0) + '点</td>' +
+      var sc = scaleOf[k] || '—';
+      return '<tr><td>' + esc(k) + '</td>' +
+        '<td><span class="chip ' + (sc === '実装成果' ? 'ok' : '') + '">' + esc(sc) + '</span></td>' +
+        '<td class="n">' + fmt(a.max,0) + '点</td>' +
         '<td class="n">' + fmt(a.got,1) + ' / ' + fmt(denom,0) + '</td>' +
         '<td><span class="hbar"><i style="width:' + pct.toFixed(1) + '%"></i></span> ' +
         '<span class="num">' + pct.toFixed(1) + '%</span></td></tr>';
-    }).join('') + '</tbody></table>';
+    }).join('') + '</tbody></table>' +
+    '<p class="hint">「実装成果」の軸だけで主分析の被説明変数を構成している。' +
+    'IV BPR・業務改革は IV-2（実績の公表）のみが実装成果側、IV-1（専管組織の有無）は体制側。</p>';
 }
 
 /* ---------- 5. 人的体制 × DX推進度 ---------- */
@@ -558,7 +647,7 @@ function renderAnalysis(){
     if(rt) rt.addEventListener('change', function(){ renderAnalysis(); });
   }
   var mKey = sel.value || MAIN_METRICS[0].key;
-  var yKey = document.getElementById('scoreSel').value || '_score';
+  var yKey = document.getElementById('scoreSel').value || '_impl';
   var metric = availableMetrics().filter(function(m){ return m.key === mKey; })[0];
   var scope = STATE.scope;
   var p = pairsFor(mKey, yKey, scope);
@@ -567,12 +656,17 @@ function renderAnalysis(){
   var showRef = scope === 'main' && document.getElementById('refToggle') &&
                 document.getElementById('refToggle').checked;
   var refs = (scope === 'main' && showRef) ? p.refOnly : [];
-  if(p.used.length >= MAIN_MIN_N){
+  var oc = outcomeOf(yKey);
+  if(p.used.length >= MIN_N_CALC){
     box.innerHTML = '<div class="chartbox">' + scatterSVG(p.used, metric, yKey, refs) + '</div>' +
       '<p class="tmeta">' +
       (scope === 'main'
-        ? '<b>主分析対象 ' + p.used.length + '市のみで回帰・相関を算出しています。</b>'
-        : '<b>これは感度分析（参考値）です。主結論には用いません。</b>') +
+        ? (p.used.length < MIN_N_MAIN
+             ? '<b>n = ' + p.used.length + ' は methodology §9.1 の望ましい水準（n≥' + MIN_N_MAIN +
+               '）に達していないため、これは<u>探索的</u>な表示です。主分析とは呼びません。</b>'
+             : '<b>主分析対象 ' + p.used.length + '市のみで回帰・相関を算出しています。</b>')
+        : '<b>これは感度分析（参考値）です。主結論には用いません。</b>' +
+          (oc.main ? '' : '総合100点スコアは説明変数と構成概念が重複する項目を含みます。')) +
       ' プロット ' + p.used.length + '市 ／ 欠損・対象外により除外 ' + p.excluded.length + '市' +
       (p.excluded.length ? '（' + esc(p.excluded.map(function(r){return r._name;}).join('、')) + '）' : '') +
       (refs.length ? ' ／ 薄い灰色の点は<b>参考値自治体（未確認率30%超）' + refs.length +
@@ -590,19 +684,20 @@ function shortageHTML(p, metric, scope){
     {label:'DX・情報関係業務担当職員数', n:countBy(function(r){ return r._dxinfo !== null; })},
     {label:'人口',                      n:countBy(function(r){ return r._pop   !== null; })},
     {label:'総職員数',                  n:countBy(function(r){ return r._staff !== null; })},
-    {label:'DX推進度（未確認率30%以下）', n:countBy(function(r){ return r._eligible; })}
+    {label:'実装成果スコア（未確認率30%以下）', n:countBy(function(r){ return r._implEligible; })}
   ];
-  var elig = names(function(r){ return r._eligible; });
-  var lack = STATE.muni.filter(function(r){ return r._eligible && r[metric.key] === null; })
+  var ocS = outcomeOf(document.getElementById('scoreSel').value || '_impl');
+  var elig = names(function(r){ return r[ocS.elig]; });
+  var lack = STATE.muni.filter(function(r){ return r[ocS.elig] && r[metric.key] === null; })
                        .map(function(r){ return r._name; });
   var why = scope === 'main'
-    ? '<b>主分析の対象市が' + MAIN_MIN_N + '市未満です。</b>未確認率30%以下の市は ' +
+    ? '<b>主分析の対象市が' + MIN_N_CALC + '市未満です。</b>' + esc(ocS.axis) + 'の未確認率30%以下の市は ' +
       elig.length + '市' + (elig.length ? '（' + esc(elig.join('、')) + '）' : '') + 'で、' +
-      (lack.length ? 'そのうち ' + lack.length + '市（' + esc(lack.join('、')) +
-        '）は「' + esc(metric.label) + '」が未取得のため対が作れません。<b>スコアが確定した市と人員が確定した市が重なっていない</b>ことが直接の原因です。'
+      (lack.length ? (lack.length === elig.length ? 'いずれも' : esc(lack.join('、')) + 'は') +
+        '「' + esc(metric.label) + '」が未取得のため対が作れません。<b>スコアが確定した市と人員が確定した市が重なっていない</b>ことが直接の原因です。'
         : '凍結ルール（methodology §6）により他市は除外されています。') +
       '上の「分析範囲」を「感度分析」に切り替えると参考値を表示します。'
-    : '<b>この指標の対を' + MAIN_MIN_N + '件以上作れません。</b>「' + esc(metric.label) + '」の分母となるデータが不足しています。';
+    : '<b>この指標の対を' + MIN_N_CALC + '件以上作れません。</b>「' + esc(metric.label) + '」の分母となるデータが不足しています。';
   return '<div class="shortage"><h3>この組み合わせでは散布図を表示できません</h3><p>' + why +
     'これは「相関がない」という結果ではなく、<b>判定に必要な数値が揃っていない</b>という意味です。</p>' +
     '<div class="reqgrid">' + reqs.map(function(q){
@@ -618,6 +713,9 @@ function shortageHTML(p, metric, scope){
     '④ 11市同一定義の人口と普通会計職員数を取得すれば、人口補正・職員数補正の分析が自動的に有効になります。</div></div>';
 }
 
+var Y_LABEL = {'_impl':'実装成果スコア（素点・60点）','_implA':'実装成果スコア（補正）',
+               '_score':'総合DXスコア（素点・100点）','_scoreA':'総合DXスコア（補正）'};
+
 function scatterSVG(rows, metric, yKey, refRows){
   refRows = refRows || [];
   var W = 880, H = 430, m = {t:18, r:26, b:54, l:66};
@@ -631,7 +729,7 @@ function scatterSVG(rows, metric, yKey, refRows){
   var padX = (xMax - xMin) * 0.12 || Math.max(1, Math.abs(xMax) * 0.1);
   var padY = (yMax - yMin) * 0.12 || Math.max(1, Math.abs(yMax) * 0.1);
   xMin -= padX; xMax += padX; yMin -= padY; yMax += padY;
-  if(yKey === '_score' || yKey === '_scoreA'){ yMin = Math.min(yMin, 0); yMax = Math.max(yMax, 20); }
+  yMin = Math.min(yMin, 0); yMax = Math.max(yMax, 20);
 
   function sx(v){ return m.l + (v - xMin) / (xMax - xMin) * (W - m.l - m.r); }
   function sy(v){ return H - m.b - (v - yMin) / (yMax - yMin) * (H - m.t - m.b); }
@@ -657,7 +755,7 @@ function scatterSVG(rows, metric, yKey, refRows){
   ticks(yMin,yMax,6).forEach(function(t){ s += '<text x="'+(m.l-9)+'" y="'+(sy(t)+4).toFixed(1)+'" text-anchor="end">'+fmt(t)+'</text>'; });
   s += '<text x="'+((m.l+W-m.r)/2)+'" y="'+(H-10)+'" text-anchor="middle">'+esc(metric.label)+'（'+esc(metric.unit)+'）</text>';
   s += '<text transform="translate(15,'+((m.t+H-m.b)/2)+') rotate(-90)" text-anchor="middle">' +
-       (yKey === '_scoreA' ? 'DX推進度 補正スコア' : 'DX推進度 素点スコア') + '</text>';
+       (Y_LABEL[yKey] || 'DX推進度') + '</text>';
 
   /* 回帰直線（最小二乗）。参考線であり、因果を示すものではない。 */
   if(rows.length >= 3){
@@ -675,7 +773,8 @@ function scatterSVG(rows, metric, yKey, refRows){
     var cx = sx(r[metric.key]), cy = sy(r[yKey]);
     s += '<circle class="pt is-ref" cx="'+cx.toFixed(1)+'" cy="'+cy.toFixed(1)+'" r="4.5">' +
          '<title>'+esc(r._name)+'（参考値・主分析対象外）\n'+esc(metric.label)+': '+fmt(r[metric.key])+
-         '\nDX推進度: '+fmt(r[yKey],1)+'\n未確認率: '+fmt(r._unconfRate,1)+'%</title></circle>';
+         '\n'+esc(Y_LABEL[yKey]||'DX推進度')+': '+fmt(r[yKey],1)+
+         '\n未確認率: '+fmt(r[outcomeOf(yKey).rateKey],1)+'%</title></circle>';
     s += '<text class="lbl is-ref" x="'+(cx+7).toFixed(1)+'" y="'+(cy+3.5).toFixed(1)+'">'+esc(r._name)+'</text>';
   });
 
@@ -693,7 +792,8 @@ function scatterSVG(rows, metric, yKey, refRows){
     var cx = sx(r[metric.key]), cy = sy(r[yKey]), f = r._isFocus && STATE.focusOn;
     s += '<circle class="pt'+(f?' focus':'')+'" cx="'+cx.toFixed(1)+'" cy="'+cy.toFixed(1)+'" r="'+(f?6.5:5)+'">' +
          '<title>'+esc(r._name)+'\n'+esc(metric.label)+': '+fmt(r[metric.key])+
-         '\nDX推進度: '+fmt(r[yKey],1)+'\n未確認率: '+fmt(r._unconfRate,1)+'%</title></circle>';
+         '\n'+esc(Y_LABEL[yKey]||'DX推進度')+': '+fmt(r[yKey],1)+
+         '\n未確認率: '+fmt(r[outcomeOf(yKey).rateKey],1)+'%</title></circle>';
     var ly = labelY(cx, cy);
     if(ly > cy + 6){   /* ずらした場合は引き出し線を引く */
       s += '<line class="lead" x1="'+(cx+5).toFixed(1)+'" y1="'+cy.toFixed(1)+
@@ -706,31 +806,47 @@ function scatterSVG(rows, metric, yKey, refRows){
 }
 
 function renderCorrelation(yKey, scope){
-  var html = availableMetrics().map(function(m){
+  var oc = outcomeOf(yKey);
+  var head = '<p class="hint" style="grid-column:1/-1;margin:0 0 4px">' +
+    '被説明変数：<b>' + esc(Y_LABEL[yKey] || '') + '</b>' +
+    (oc.main
+      ? '（主分析の被説明変数。人的・組織体制そのものを測る項目を除いた部分尺度）'
+      : '（<b>参考</b>。説明変数と構成概念が重複する I-3・IV-1・V-2・V-3 等を含むため主結論に用いない）') +
+    '／範囲：' + (scope==='main' ? '主分析（未確認率30%以下）' : '感度分析（参考値を含む全市）') +
+    '。95%信頼区間は Fisher z 変換（Spearman は Bonett–Wright）による。</p>';
+
+  var html = head + availableMetrics().map(function(m){
     var p = pairsFor(m.key, yKey, scope);
     var n = p.used.length;
     var tier = m.tier === 'main' ? '<span class="chip">主分析指標</span>' : '<span class="chip warn">補助・狭義</span>';
-    if(n < 5){
-      return '<div class="corr unavailable"><div class="c-label">' + esc(m.label) + ' × DX推進度 ' + tier + '</div>' +
-        '<div class="c-row"><span>Pearson r</span><span class="cv">評価不能</span></div>' +
-        '<div class="c-row"><span>Spearman ρ</span><span class="cv">評価不能</span></div>' +
+    if(n < MIN_N_CALC){
+      return '<div class="corr unavailable"><div class="c-label">' + esc(m.label) + ' × ' +
+        esc(Y_LABEL[yKey] || '') + ' ' + tier + '</div>' +
+        '<div class="c-row"><span>Pearson r</span><span class="cv">算出不能</span></div>' +
+        '<div class="c-row"><span>Spearman ρ</span><span class="cv">算出不能</span></div>' +
         '<div class="c-n">有効な対 n = ' + n + ' ／ 除外 ' + p.excluded.length + '市<br>' +
         'データ不足のため算出していません。<b>相関がないという意味ではありません。</b></div></div>';
     }
     var xs = p.used.map(function(r){ return r[m.key]; });
     var ys = p.used.map(function(r){ return r[yKey]; });
     var r = pearson(xs,ys), rho = spearman(xs,ys);
+    var rci = fisherCI(r,n,'pearson'), rhoci = fisherCI(rho,n,'spearman');
     var rc = critical(R_CRIT,n), rhoc = critical(RHO_CRIT,n);
-    return '<div class="corr"><div class="c-label">' + esc(m.label) + ' × DX推進度 ' + tier + '</div>' +
-      '<div class="c-row"><span>Pearson r</span><span class="cv num">' + (r===null?'—':r.toFixed(3)) + '</span></div>' +
-      '<div class="c-row"><span></span><span style="font-size:11.5px;color:var(--muted)">' + strengthWord(r,n,rc) + '</span></div>' +
-      '<div class="c-row"><span>Spearman ρ</span><span class="cv num">' + (rho===null?'—':rho.toFixed(3)) + '</span></div>' +
+    var tl = tierLabel(n, scope);
+    var weak = (scope === 'main' && n < MIN_N_MAIN);
+    return '<div class="corr' + (weak ? ' unavailable' : '') + '">' +
+      '<div class="c-label">' + esc(m.label) + ' × ' + esc(Y_LABEL[yKey] || '') + ' ' + tier +
+      ' <span class="chip ' + (weak ? 'warn' : '') + '">' + tl + '</span></div>' +
+      '<div class="c-row"><span>Spearman ρ<small>（主指標）</small></span><span class="cv num">' + (rho===null?'—':rho.toFixed(3)) + '</span></div>' +
+      '<div class="c-row"><span></span><span style="font-size:11.5px;color:var(--muted)">' + ciText(rhoci) + '</span></div>' +
       '<div class="c-row"><span></span><span style="font-size:11.5px;color:var(--muted)">' + strengthWord(rho,n,rhoc) + '</span></div>' +
-      '<div class="c-n">使用指標：' + (yKey==='_scoreA'?'補正スコア':'素点スコア') + '／範囲：' +
-      (scope==='main'?'主分析':'感度分析（参考値含む）') + '<br>' +
-      '分析対象 n = ' + n + '市 ／ 除外 ' + p.excluded.length + '市' +
+      '<div class="c-row"><span>Pearson r<small>（併記）</small></span><span class="cv num">' + (r===null?'—':r.toFixed(3)) + '</span></div>' +
+      '<div class="c-row"><span></span><span style="font-size:11.5px;color:var(--muted)">' + ciText(rci) + '</span></div>' +
+      '<div class="c-row"><span></span><span style="font-size:11.5px;color:var(--muted)">' + strengthWord(r,n,rc) + '</span></div>' +
+      '<div class="c-n">分析対象 n = ' + n + '市 ／ 除外 ' + p.excluded.length + '市' +
       (p.excluded.length ? '（' + esc(p.excluded.map(function(x){return x._name;}).join('、')) + '）' : '') +
-      '<br>有意水準5%（両側）臨界値：r = ' + (rc===null?'—':rc.toFixed(3)) + ' ／ ρ = ' + (rhoc===null?'—':rhoc.toFixed(3)) +
+      '<br>有意水準5%（両側）臨界値：ρ = ' + (rhoc===null?'—':rhoc.toFixed(3)) + ' ／ r = ' + (rc===null?'—':rc.toFixed(3)) +
+      (weak ? '<br><b>n&lt;' + MIN_N_MAIN + ' のため探索的な値です。主分析とは呼びません。</b>' : '') +
       '</div></div>';
   }).join('');
   document.getElementById('corrgrid').innerHTML = html;
@@ -761,17 +877,9 @@ function renderFocus(){
       stat('人口1万人あたり', (f._dxinfoPer10k===null?'不明':fmt(f._dxinfoPer10k,2)), f._dxinfoPer10k===null?'人口が未取得のため算出不能':'') +
       stat('職員100人あたり', (f._dxinfoPer100===null?'不明':fmt(f._dxinfoPer100,2)), f._dxinfoPer100===null?'総職員数が未取得のため算出不能':'') +
       stat('DX専任組織', (org?org.name:'不明'), esc(txt(f.dedicated_dx_org))) +
-      stat('DX推進度 素点', fmt(f._score,1)+'<span class="of"> / 100</span>', '未確認率 '+fmt(f._unconfRate,1)+'%') +
+      stat('実装成果スコア', fmt(f._impl,1)+'<span class="of"> / '+fmt(f._implMax,0)+'</span>', '未確認率 '+fmt(f._implRate,1)+'%') +
     '</div>' +
-    (f._fieldTeam === null ? '' :
-      '<div class="banner" style="margin-top:14px"><p><b>人員は定義の異なる2つの指標を分けて読む必要がある。</b></p>' +
-      '<ul style="margin:6px 0 0 18px">' +
-      '<li><b>2024年度 総務省広義人員：' + fmt(f._dxinfo) + '人</b> — ' +
-        'DX推進担当課室と情報政策担当課室の合計（同一定義で県内比較できる唯一の指標）</li>' +
-      '<li><b>' + esc(txt(f.field_team_fiscal_year)) + ' DX推進実働体制：' + fmt(f._fieldTeam) + '人</b>' +
-        '（前年度3人）— ' + esc(txt(f.field_team_note)) + '</li></ul>' +
-      '<p style="margin-top:8px">両者は<b>集計範囲も基準日も異なるため、増減として接続してはならない</b>。' +
-      '後者は公開一次資料で確認できていないため、県内比較の統計には投入していない。</p></div>') +
+
     '<p class="hint">' + esc(FOCUS_CITY) + 'は「' + (org?org.name:'不明') + '」かつ「' + FUNC_LABEL[f._funcType] + '」。' +
     'DX専管組織を置かず情報政策課（ＩＴ推進係・システム管理係）が所掌しているため、' +
     '広義人員' + (f._dxinfo===null?'':fmt(f._dxinfo)+'人') + 'のうちDX企画に充てられる人数は本数値からは分からない。' +
@@ -802,8 +910,10 @@ function renderPairs(){
       '<tr><td>DX・情報関係業務担当職員数</td>' + cell(a,'_dxinfo',0,'人') + cell(b,'_dxinfo',0,'人') + '</tr>' +
       '<tr><td>人口1万人あたり</td>' + cell(a,'_dxinfoPer10k',2) + cell(b,'_dxinfoPer10k',2) + '</tr>' +
       '<tr><td>職員100人あたり</td>' + cell(a,'_dxinfoPer100',2) + cell(b,'_dxinfoPer100',2) + '</tr>' +
-      '<tr><td>DX推進度 素点</td>' + cell(a,'_score',1) + cell(b,'_score',1) + '</tr>' +
-      '<tr><td>未確認率</td>' + cell(a,'_unconfRate',1,'%') + cell(b,'_unconfRate',1,'%') + '</tr>' +
+      '<tr><td>実装成果スコア（60点）</td>' + cell(a,'_impl',1) + cell(b,'_impl',1) + '</tr>' +
+      '<tr><td>　同 未確認率</td>' + cell(a,'_implRate',1,'%') + cell(b,'_implRate',1,'%') + '</tr>' +
+      '<tr><td>総合DXスコア（100点）</td>' + cell(a,'_score',1) + cell(b,'_score',1) + '</tr>' +
+      '<tr><td>　同 未確認率</td>' + cell(a,'_unconfRate',1,'%') + cell(b,'_unconfRate',1,'%') + '</tr>' +
       '<tr><td>組織類型</td><td>' + orgName(a) + '<br><span style="color:var(--muted);font-size:11px">' + FUNC_LABEL[a._funcType] + '</span></td>' +
       '<td>' + orgName(b) + '<br><span style="color:var(--muted);font-size:11px">' + FUNC_LABEL[b._funcType] + '</span></td></tr>' +
       '</tbody></table></div>';
@@ -838,7 +948,7 @@ function renderTypology(){
           (r._hasBpr ? '<span class="chip ok">業務改善組織あり</span>' : '<span class="chip miss">業務改善組織 未確認</span>') +
           '</div>' +
           '<div class="cstat">広義人員 <b class="num">' + (r._dxinfo===null?'不明':fmt(r._dxinfo)+'人') + '</b>' +
-          '　DX推進度 <b class="num">' + fmt(r._score,1) + '</b></div>' +
+          '　実装成果 <b class="num">' + fmt(r._impl,1) + '</b>/' + fmt(r._implMax,0) + '</div>' +
           '<details><summary>詳細</summary><dl>' +
             '<dt>情報政策担当</dt><dd>' + esc(txt(r.info_policy_department)) + '</dd>' +
             '<dt>業務改善担当</dt><dd>' + esc(txt(r.bpr_department)) + '</dd>' +
@@ -897,8 +1007,9 @@ var COLUMNS = [
   {key:'_dxinfo', label:'DX・情報関係<br>業務担当職員数', type:'num', digits:0},
   {key:'_dx', label:'参考：DX専任<br>主担当（狭義）', type:'num', digits:0},
   {key:'_dxinfoPer10k', label:'人口1万人<br>あたり', type:'num', digits:2},
-  {key:'_score', label:'DX推進度', type:'num', digits:1},
-  {key:'_unconfRate', label:'未確認率', type:'num', digits:1},
+  {key:'_impl', label:'実装成果<br>スコア', type:'num', digits:1},
+  {key:'_score', label:'総合DX<br>スコア', type:'num', digits:1},
+  {key:'_implRate', label:'実装成果<br>未確認率', type:'num', digits:1},
   {key:'dx_info_staff_confidence', label:'人員確度', type:'conf'}
 ];
 
@@ -971,7 +1082,7 @@ var COV_FIELDS = [
   {label:'人口',         test:function(r){ return r._pop   !== null; }},
   {label:'総職員数',     test:function(r){ return r._staff !== null; }},
   {label:'DX推進度<br>採点', test:function(r){ return r._score !== null; }},
-  {label:'主分析<br>対象', test:function(r){ return r._eligible; }}
+  {label:'主分析<br>対象', test:function(r){ return r._implEligible; }}
 ];
 function evidenceFor(n){ return STATE.evidence.filter(function(e){ return String(e.municipality).trim() === n; }); }
 

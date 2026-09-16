@@ -66,11 +66,6 @@ NARROW = {
 POPULATION = {'那覇市': (311916, '2026-08-31', 'A')}
 TOTAL_STAFF = {}   # 普通会計職員数（総務省定員管理調査ベース）: 未取得
 
-# 糸満市の庁内実態（ユーザー提供・公開一次資料ではない）。
-# 総務省の広義人員（2024年度6人）とは定義が異なるため、別指標として保持する。
-ITOMAN_FIELD_TEAM = dict(fy='2026年度', staff=2, prev=3,
-    note='ユーザー提供の庁内実態。公開一次資料未確認。総務省広義人員（2024年度6人）とは定義が異なる')
-
 # 外部専門人材の任用状況（総務省2024年度調査・V-2の根拠と同一）
 EXTERNAL_EXPERT = {'那覇市':'有','宜野湾市':'有','石垣市':'有（3人）','浦添市':'有','宮古島市':'有',
                    '名護市':'無（2024年度時点）','糸満市':'無（2024年度時点）','沖縄市':'無（2024年度時点）',
@@ -82,6 +77,25 @@ DX_BPR_INTEGRATED = {'浦添市':'該当（行政改革推進課＝行革＋デ�
                      '名護市':'非該当（業務改善推進室とDX/情報システムが別組織）',
                      '宜野湾市':'非該当（デジタル推進課と行政経営室が別組織）',
                      'うるま市':'非該当（DX推進課と事務事業イノベーション推進室が別組織）'}
+
+# ----------------------------------------------------------------------------
+# 3. 実装成果スコア（主分析の被説明変数）
+#    100点ルーブリックには「全庁的推進本部」「BPR専管組織」「外部専門人材」
+#    「デジタル人材の採用・配置」など、説明変数（人的・組織体制）と構成概念が
+#    重複する項目が含まれる。これを人員数と相関させると、採点設計に由来する
+#    相関が構造的に生じうる。
+#    そこで、施策の実装成果だけで構成した部分尺度を主分析の被説明変数として
+#    別途保持する。ルーブリック自体は変更せず、同一の判定結果から集計するだけ。
+#      II  行政手続DX      （20点）
+#      III 内部業務DX      （20点）
+#      IV-2 BPR実施実績の公表（5点）  ※IV-1「専管組織の有無」は体制側なので除外
+#      VI  住民サービス・データ活用（15点）
+#    合計60点。正規化・未確認率・30%除外ルールは総合スコアと同一手順で適用する。
+# ----------------------------------------------------------------------------
+OUTCOME_AXES  = {'行政手続DX', '内部業務DX', '住民サービス・データ活用'}
+OUTCOME_ITEMS = {'IV-2'}
+def is_outcome(item):
+    return item['axis_name'] in OUTCOME_AXES or item['item_id'] in OUTCOME_ITEMS
 
 def rd(path):
     with io.open(p(path), encoding='utf-8') as f: return list(csv.DictReader(f))
@@ -105,9 +119,12 @@ for (m, iid), f in FACTS.items():
 
 UNCONF_NOTE = '確度A・Bの一次資料根拠を確認できず。非実施を意味しない'
 
+OUTCOME_MAX = sum(float(r['max_points']) for r in rubric if is_outcome(r))
+
 sr_rows=[]; summary={}
 for m in MUNIS:
     raw=0.0; judgeable=0.0; unconf_pts=0.0; unconf_n=0; confirmed_zero=0
+    o_raw=0.0; o_judge=0.0; o_unconf=0.0
     for it in rubric:
         iid=it['item_id']; mx=float(it['max_points'])
         f = FACTS.get((m, iid))
@@ -122,17 +139,26 @@ for m in MUNIS:
         else:
             pts, conf, title, url, ev, note = 0, '不明', '', '', '', UNCONF_NOTE
             status='未確認'; unconf_pts+=mx; unconf_n+=1
+        if is_outcome(it):
+            o_raw += pts
+            if status=='未確認': o_unconf += mx
+            else:                o_judge  += mx
         sr_rows.append(dict(municipality=m,item_id=iid,axis_name=it['axis_name'],
             item_name=it['item_name'],max_points=('%g'%mx),points=('%g'%pts),status=status,
-            confidence=conf,source_title=title,source_url=url,evidence=ev,note=note))
+            confidence=conf,source_title=title,source_url=url,evidence=ev,note=note,
+            scale='実装成果' if is_outcome(it) else '体制'))
     rate = unconf_pts/TOTAL_POINTS*100
+    o_rate = o_unconf/OUTCOME_MAX*100
     summary[m]=dict(raw=raw, judgeable=judgeable,
                     adjusted=(raw/judgeable*100 if judgeable>0 else None),
                     unconf_pts=unconf_pts, unconf_n=unconf_n, rate=rate,
-                    confirmed_zero=confirmed_zero, eligible=(rate<=30.0))
+                    confirmed_zero=confirmed_zero, eligible=(rate<=30.0),
+                    o_raw=o_raw, o_judge=o_judge, o_unconf=o_unconf, o_rate=o_rate,
+                    o_adjusted=(o_raw/o_judge*100 if o_judge>0 else None),
+                    o_eligible=(o_rate<=30.0))
 
 wr('data/scoring_results.csv',
-   ['municipality','item_id','axis_name','item_name','max_points','points','status',
+   ['municipality','item_id','axis_name','item_name','scale','max_points','points','status',
     'confidence','source_title','source_url','evidence','note'], sr_rows)
 
 # ============================ municipalities.csv 更新 ============================
@@ -143,7 +169,8 @@ NEWCOLS = ['dx_info_staff','dx_info_staff_source_date','dx_info_staff_confidence
            'dx_bpr_combined_staff','dx_bpr_combined_staff_confidence','dx_staff_fiscal_year',
            'judgeable_points','unconfirmed_points','unconfirmed_rate','main_analysis_eligible',
            'confirmed_zero_items','external_expert','dx_bpr_integrated',
-           'field_team_staff','field_team_fiscal_year','field_team_note']
+           'impl_score','impl_score_adjusted','impl_max_points','impl_judgeable_points',
+           'impl_unconfirmed_points','impl_unconfirmed_rate','impl_main_analysis_eligible']
 header = list(mu[0].keys())
 for c in NEWCOLS:
     if c not in header: header.append(c)
@@ -172,11 +199,6 @@ for r in mu:
         r['dx_bpr_combined_staff']=str(nr['dx_bpr_combined_staff'])
         r['dx_bpr_combined_staff_confidence']=nr['combined_conf']
     if 'fy' in nr: r['dx_staff_fiscal_year']=nr['fy']
-    # --- 糸満市の2026年度DX推進実働体制（別指標。広義6人と混同しない） ---
-    if m == '糸満市':
-        r['field_team_staff']=str(ITOMAN_FIELD_TEAM['staff'])
-        r['field_team_fiscal_year']=ITOMAN_FIELD_TEAM['fy']
-        r['field_team_note']='前年度%d人。%s'%(ITOMAN_FIELD_TEAM['prev'], ITOMAN_FIELD_TEAM['note'])
     # --- 組織構造の定性情報（スコア化しない） ---
     r['external_expert']=EXTERNAL_EXPERT.get(m,'不明')
     r['dx_bpr_integrated']=DX_BPR_INTEGRATED.get(m,'不明')
@@ -206,6 +228,14 @@ for r in mu:
     r['unconfirmed_items']=str(s['unconf_n'])
     r['confirmed_zero_items']=str(s['confirmed_zero'])
     r['main_analysis_eligible']='該当' if s['eligible'] else '除外（未確認率30%超）'
+    # --- 実装成果スコア（主分析の被説明変数） ---
+    r['impl_score']=('%g'%s['o_raw'])
+    r['impl_score_adjusted']=('%.1f'%s['o_adjusted']) if s['o_adjusted'] is not None else '算出不能'
+    r['impl_max_points']=('%g'%OUTCOME_MAX)
+    r['impl_judgeable_points']=('%g'%s['o_judge'])
+    r['impl_unconfirmed_points']=('%g'%s['o_unconf'])
+    r['impl_unconfirmed_rate']=('%.1f'%s['o_rate'])
+    r['impl_main_analysis_eligible']='該当' if s['o_eligible'] else '除外（未確認率30%超）'
 
 wr('data/municipalities.csv', header, mu)
 
@@ -237,63 +267,122 @@ def numf(x):
     try: return float(x)
     except Exception: return None
 
+# 事前登録（methodology §9.1〜§9.3）:
+#   Spearman ρ を主指標、Pearson r を併記、95%信頼区間を併記する。
+#   n<3 は算出不能。n<6（§9.1が望ましいとした水準）は「探索的」と表示し主分析と呼ばない。
+MIN_N_CALC = 3
+MIN_N_MAIN = 6
+
+def fisher_ci(coef, n, kind):
+    """Fisher z変換による95%信頼区間。
+       Pearson  : SE = 1/sqrt(n-3)
+       Spearman : SE = sqrt(1.06/(n-3))（Bonett–Wright）
+       n<=3 では算出しない。標本が小さいほど区間は極端に広くなる点に注意。"""
+    if coef is None or n < 4: return (None, None)
+    c = max(min(coef, 0.999999), -0.999999)
+    z = math.atanh(c)
+    se = (1.0/math.sqrt(n-3)) if kind=='pearson' else math.sqrt(1.06/(n-3))
+    return (math.tanh(z - 1.959964*se), math.tanh(z + 1.959964*se))
+
 METRICS=[('dx_info_staff','DX・情報関係業務担当職員数（総務省・広義）'),
          ('dx_info_staff_per_10000_population','人口1万人あたりDX・情報関係業務担当職員数'),
          ('dx_info_staff_per_100_staff','職員100人あたりDX・情報関係業務担当職員数')]
-SCORES=[('dx_score','raw'),('dx_score_adjusted','adjusted')]
+
+# 被説明変数。主分析は実装成果スコアのみ。総合100点スコアは説明変数と構成概念が
+# 重複するため感度分析に限定する。
+OUTCOMES=[
+  ('impl',  '実装成果スコア（II+III+IV-2+VI・60点）', 'impl_score','impl_score_adjusted',
+   'impl_main_analysis_eligible', True),
+  ('total', '総合DXスコア（21項目・100点）',          'dx_score','dx_score_adjusted',
+   'main_analysis_eligible', False),
+]
 
 ana=[]
 for mk,mlabel in METRICS:
-    for sk,slabel in SCORES:
-        for scope,flt in (('主分析（未確認率30%以下）', lambda r: r['main_analysis_eligible']=='該当'),
-                          ('感度分析（参考値を含む全市）', lambda r: True)):
-            xs=[];ys=[];used=[];excl=[]
-            for r in mu:
-                if not flt(r): excl.append(r['municipality']); continue
-                x=numf(r[mk]); y=numf(r[sk])
-                if x is None or y is None: excl.append(r['municipality']); continue
-                xs.append(x); ys.append(y); used.append(r['municipality'])
-            pr=pearson(xs,ys); sp=spearman(xs,ys)
-            if len(xs)<3:
-                note='n<3のため算出不能。データ不足であり「相関なし」を意味しない'
+    for okey,olabel,rawcol,adjcol,eligcol,allow_main in OUTCOMES:
+        for stype,scol in (('raw',rawcol),('adjusted',adjcol)):
+            scopes=[('感度分析（参考値を含む全市）', None)]
+            if allow_main:
+                scopes.insert(0, ('主分析（実装成果・未確認率30%以下）', eligcol))
+            for scope,efld in scopes:
+                xs=[];ys=[];used=[];excl=[]
+                for r in mu:
+                    if efld and r[efld]!='該当': excl.append(r['municipality']); continue
+                    x=numf(r[mk]); y=numf(r[scol])
+                    if x is None or y is None: excl.append(r['municipality']); continue
+                    xs.append(x); ys.append(y); used.append(r['municipality'])
+                n=len(xs)
+                pr=pearson(xs,ys); sp=spearman(xs,ys)
+                prl,prh=fisher_ci(pr,n,'pearson'); spl,sph=fisher_ci(sp,n,'spearman')
+                if n < MIN_N_CALC:      tier='算出不能'
+                elif n < MIN_N_MAIN:    tier='探索的（n<%d）'%MIN_N_MAIN
+                else:                   tier='成立（n>=%d）'%MIN_N_MAIN
+
+                # scope 固有の注記は n によらず必ず付ける
                 if scope.startswith('主分析'):
-                    eg=[r['municipality'] for r in mu if r['main_analysis_eligible']=='該当']
-                    lack=[m2 for m2 in eg if numf([r for r in mu if r['municipality']==m2][0][mk]) is None]
-                    if eg and lack:
-                        note += ('。主分析対象%d市（%s）は本指標が未取得のため対が作れない'
-                                 %(len(eg),'／'.join(eg)))
-            elif scope.startswith('主分析'):
-                note='相関は因果を意味しない。n が小さく検出力は低い。有意でないことは関係が無いことを意味しない'
-            else:
-                note='参考値。未確認率30%超の市を含むためスコアは調査到達度を強く反映する。主結論には用いない'
-            ana.append(dict(metric=mk, metric_label=mlabel, score_type=slabel, scope=scope,
-                n=len(xs), excluded=len(excl),
-                pearson=('%.3f'%pr) if pr is not None else '算出不能',
-                spearman=('%.3f'%sp) if sp is not None else '算出不能',
-                included_municipalities='／'.join(used) if used else '—',
-                excluded_municipalities='／'.join(excl) if excl else '—',
-                note=note))
+                    base='相関は因果を意味しない。'
+                    if 0 < n < MIN_N_MAIN:
+                        base+='n<%d のため探索的な値であり主分析として断定的に解釈しない。'%MIN_N_MAIN
+                    base+='有意でないことは関係が無いことを意味しない（検出力不足）'
+                else:
+                    base='参考値であり主結論には用いない。'
+                    if okey=='total':
+                        base+='総合100点スコアは I-3・IV-1・V-2・V-3 等、説明変数と構成概念が重複する項目を含むため'
+                        base+='人員数と相関させると採点設計に由来する相関が生じうる'
+                    else:
+                        base+='未確認率30%超の市を含むためスコアは調査到達度を強く反映する'
+
+                if n < MIN_N_CALC:
+                    note='n<%d のため算出不能。データ不足であり「相関なし」を意味しない'%MIN_N_CALC
+                    if efld:
+                        eg=[r['municipality'] for r in mu if r[efld]=='該当']
+                        lack=[m2 for m2 in eg
+                              if numf([r for r in mu if r['municipality']==m2][0][mk]) is None]
+                        if eg and lack:
+                            note += ('。主分析対象%d市（%s）は本指標が未取得のため対が作れない'
+                                     %(len(eg),'／'.join(eg)))
+                    note += '。' + base
+                else:
+                    note = base
+
+                def f3(v): return ('%.3f'%v) if v is not None else '算出不能'
+                ana.append(dict(metric=mk, metric_label=mlabel,
+                    outcome=okey, outcome_label=olabel, score_type=stype, scope=scope,
+                    tier=tier, n=n, excluded=len(excl),
+                    pearson=f3(pr), pearson_ci_low=f3(prl), pearson_ci_high=f3(prh),
+                    spearman=f3(sp), spearman_ci_low=f3(spl), spearman_ci_high=f3(sph),
+                    included_municipalities='／'.join(used) if used else '—',
+                    excluded_municipalities='／'.join(excl) if excl else '—',
+                    note=note))
 
 wr('data/analysis_results.csv',
-   ['metric','metric_label','score_type','scope','n','excluded','pearson','spearman',
+   ['metric','metric_label','outcome','outcome_label','score_type','scope','tier',
+    'n','excluded','pearson','pearson_ci_low','pearson_ci_high',
+    'spearman','spearman_ci_low','spearman_ci_high',
     'included_municipalities','excluded_municipalities','note'], ana)
 
 # ============================ 標準出力サマリー ============================
-print('=== 採点結果（凍結ルーブリック %g点満点・%d項目） ==='%(TOTAL_POINTS,len(rubric)))
-print('%-9s %6s %8s %9s %8s %7s %s'%('市','raw','判定可能','adjusted','未確認率','確認0点','主分析'))
+print('=== 採点結果（凍結ルーブリック %g点満点・%d項目／実装成果 %g点・%d項目） ==='%(
+      TOTAL_POINTS,len(rubric),OUTCOME_MAX,sum(1 for r in rubric if is_outcome(r))))
+print('%-9s %6s %8s %7s %s | %6s %8s %7s %s'%(
+      '市','総合raw','判定可能','未確認率','主分析','成果raw','判定可能','未確認率','主分析'))
 for m in MUNIS:
-    s=summary[m]
-    adj=('%.1f'%s['adjusted']) if s['adjusted'] is not None else '算出不能'
-    print('%-9s %6g %8g %9s %7.1f%% %6d %s'%(m,s['raw'],s['judgeable'],adj,s['rate'],
-          s['confirmed_zero'],'該当' if s['eligible'] else '除外'))
+    s2=summary[m]
+    print('%-9s %6g %8g %6.1f%% %s | %6g %8g %6.1f%% %s'%(
+          m,s2['raw'],s2['judgeable'],s2['rate'],'該当' if s2['eligible'] else '除外',
+          s2['o_raw'],s2['o_judge'],s2['o_rate'],'該当' if s2['o_eligible'] else '除外'))
 elig=[m for m in MUNIS if summary[m]['eligible']]
-print('\n主分析対象（未確認率30%%以下）: %d市 — %s'%(len(elig), '／'.join(elig) or 'なし'))
-print('広義人員 確認済み: %d市 — %s'%(len(DX_INFO_STAFF),'／'.join(sorted(DX_INFO_STAFF))))
-both=[m for m in elig if m in DX_INFO_STAFF]
+oelig=[m for m in MUNIS if summary[m]['o_eligible']]
+print('\n総合スコアで未確認率30%%以下: %d市 — %s'%(len(elig),'／'.join(elig) or 'なし'))
+print('実装成果スコアで未確認率30%%以下（主分析対象）: %d市 — %s'%(len(oelig),'／'.join(oelig) or 'なし'))
+print('広義人員 確認済み: %d市'%len(DX_INFO_STAFF))
+both=[m for m in oelig if m in DX_INFO_STAFF]
 print('主分析対象かつ広義人員あり: %d市 — %s'%(len(both), '／'.join(both) or 'なし'))
 
-print('\n=== 相関（広義人数 × raw / adjusted） ===')
+print('\n=== 相関（広義人数 × 各被説明変数） ===')
 for a in ana:
     if a['metric']=='dx_info_staff':
-        print('  %-26s %-8s n=%-2d 除外=%-2d  Pearson=%-8s Spearman=%s'%(
-              a['scope'],a['score_type'],a['n'],a['excluded'],a['pearson'],a['spearman']))
+        print('  %-30s %-8s %-14s n=%-2d  r=%-9s [%s, %s]  rho=%-9s [%s, %s]'%(
+              a['scope'],a['score_type'],a['outcome'],a['n'],
+              a['pearson'],a['pearson_ci_low'],a['pearson_ci_high'],
+              a['spearman'],a['spearman_ci_low'],a['spearman_ci_high']))
