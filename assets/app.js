@@ -18,6 +18,8 @@ var DATA_FILES = {
   scoring:        'data/scoring_results.csv'
 };
 
+var MAIN_MIN_N = 3;          /* 主分析の散布図を描く最小対象数（methodology §9.1） */
+
 var FOCUS_CITY = '糸満市';   /* 本調査の利用主体。強調のみで、評価・統計処理は一切変えない */
 
 var MISSING_TOKENS = ['', '-', '—', '–', '不明', '未評価', '未採点', '未確認',
@@ -150,6 +152,8 @@ function derive(rows){
     r._infoDept = num(r.info_policy_dept_staff);
     r._combined = num(r.dx_bpr_combined_staff);
     r._ext      = num(r.external_dx_staff);
+    /* 庁内実態ベースの実働体制。広義人員とは定義が異なるため必ず別変数で保持する。 */
+    r._fieldTeam = num(r.field_team_staff);
 
     /* スコア */
     r._score  = num(r.dx_score);
@@ -214,15 +218,19 @@ function critical(tbl, n){ if(n < 5) return null; return tbl[n] !== undefined ? 
 
 /* 指標の対を作る。scope='main' は未確認率30%以下の市に限る（methodology §6） */
 function pairsFor(xKey, yKey, scope){
-  var used = [], excluded = [];
+  var used = [], excluded = [], refOnly = [];
   STATE.muni.forEach(function(r){
-    if(scope === 'main' && !r._eligible){ excluded.push(r); return; }
-    if(r[xKey] === null || r[xKey] === undefined || r[yKey] === null || r[yKey] === undefined){
+    var hasVals = !(r[xKey] === null || r[xKey] === undefined ||
+                    r[yKey] === null || r[yKey] === undefined);
+    if(scope === 'main' && !r._eligible){
+      /* 未確認率30%超。統計には入れないが、参考値として薄く表示できるよう分けて返す */
+      if(hasVals) refOnly.push(r);
       excluded.push(r); return;
     }
+    if(!hasVals){ excluded.push(r); return; }
     used.push(r);
   });
-  return {used:used, excluded:excluded};
+  return {used:used, excluded:excluded, refOnly:refOnly};
 }
 
 /* 相関の強さの言語表現。係数の絶対値だけで断定しない。 */
@@ -307,6 +315,9 @@ function renderSummary(){
   var scored      = countBy(function(r){ return r._score !== null; });
   var eligible    = countBy(function(r){ return r._eligible; });
   var main = headline('main'), sens = headline('sensitivity');
+  var useMain = (main.n >= MAIN_MIN_N);
+  var h = useMain ? main : sens;
+  var srcLabel = useMain ? '主分析' : '感度分析（参考値）';
 
   function kpi(label, value, note, cls){
     return '<div class="kpi ' + (cls||'') + '"><div class="k-label">' + label + '</div>' +
@@ -317,78 +328,104 @@ function renderSummary(){
   document.getElementById('kpis').innerHTML =
     kpi('調査対象', total + '<span class="of">市</span>', '沖縄県内の全「市」') +
     kpi('広義人員データ 確認済み', dxinfoKnown + of,
-        '総務省・同一定義・2024-04-01基準<br>確度A。残り3市は総務省値未取得') +
-    kpi('DX推進度 採点済み', scored + of, '凍結ルーブリック100点満点で採点') +
-    kpi('主分析 対象', main.n + of,
-        eligible === 0 ? '<b>未確認率30%超のため全市が除外</b>' : '未確認率30%以下の市') +
-    kpi('Pearson r（感度分析）', sens.r === null ? '—' : sens.r.toFixed(3),
-        'n = ' + sens.n + '／' + strengthWord(sens.r, sens.n, sens.rc)) +
-    kpi('Spearman ρ（感度分析）', sens.rho === null ? '—' : sens.rho.toFixed(3),
-        'n = ' + sens.n + '／' + strengthWord(sens.rho, sens.n, sens.rhoc));
+        '総務省・同一定義・2024-04-01基準・確度A<br>那覇市・宜野湾市・浦添市は未取得') +
+    kpi('DX推進度 採点済み', scored + of, '凍結ルーブリック21項目・100点満点') +
+    kpi('主分析 対象', eligible + of,
+        eligible === 0 ? '<b>未確認率30%超のため全市が除外</b>'
+                       : '未確認率30%以下の市（' + esc(names(function(r){ return r._eligible; }).join('、')) + '）',
+        eligible === 0 ? 'alert' : '') +
+    kpi('Pearson r（' + srcLabel + '）', h.r === null ? '算出不能' : h.r.toFixed(3),
+        h.r === null ? '対が' + MAIN_MIN_N + '件未満のため算出していない'
+                     : 'n = ' + h.n + '／' + strengthWord(h.r, h.n, h.rc)) +
+    kpi('Spearman ρ（' + srcLabel + '）', h.rho === null ? '算出不能' : h.rho.toFixed(3),
+        h.rho === null ? '対が' + MAIN_MIN_N + '件未満のため算出していない'
+                       : 'n = ' + h.n + '／' + strengthWord(h.rho, h.n, h.rhoc));
 
+  /* 現時点の結論（ファーストビュー必須表示） */
   var badge = document.getElementById('readiness');
-  if(main.n >= 5){
+  var lackStaff = STATE.muni.filter(function(r){ return r._eligible && r._dxinfo === null; })
+                            .map(function(r){ return r._name; });
+  if(useMain){
     badge.className = 'kpi';
-    badge.innerHTML = '<div class="k-label">仮説H1の判定</div>' +
-      '<div class="k-value" style="font-size:17px;padding-top:5px">主分析 n=' + main.n + ' で評価</div>';
+    badge.innerHTML = '<div class="k-label">現時点の結論（仮説H1：人的体制が厚いほどDXが進んでいる）</div>' +
+      '<div class="k-value" style="font-size:17px;padding-top:5px">主分析 n=' + main.n + ' で評価</div>' +
+      '<div class="k-note">Pearson r = ' + (main.r===null?'—':main.r.toFixed(3)) +
+      '／Spearman ρ = ' + (main.rho===null?'—':main.rho.toFixed(3)) + '。' +
+      'n が小さいため検出力は低く、<b>有意でないことは「関係がない」ことを意味しない</b>。</div>';
   }else{
     badge.className = 'kpi alert';
-    badge.innerHTML = '<div class="k-label">仮説H1（人的体制が厚いほどDXが進んでいる）の判定</div>' +
-      '<div class="k-value">現時点では判定できない</div>' +
-      '<div class="k-note"><b>人員データは揃ったが、DX推進度の確認が追いついていない。</b>' +
-      '全11市が未確認率30%超のため、凍結ルールにより主分析から除外された（主分析 n=' + main.n + '）。' +
-      '感度分析の値は参考値であり、DX推進度の実態ではなく<b>調査の到達度</b>を反映している。</div>';
+    badge.innerHTML = '<div class="k-label">現時点の結論（仮説H1：人的体制が厚いほどDXが進んでいる）</div>' +
+      '<div class="k-value">主分析では判定できない（n = ' + main.n + '）</div>' +
+      '<div class="k-note">正式再採点の結果、未確認率30%以下は <b>' + eligible + '市</b>（' +
+      esc(names(function(r){ return r._eligible; }).join('、') || 'なし') + '）。' +
+      (lackStaff.length
+        ? 'ただし' + (lackStaff.length === eligible ? 'この全市' : esc(lackStaff.join('、'))) +
+          'で総務省の広義人員が未取得であり、<b>スコアが確定した市と人員が確定した市が重なっていない</b>ため対が作れない。'
+        : '') +
+      '感度分析の値は参考であり、DX推進度の実態ではなく<b>調査の到達度</b>を強く反映している。</div>';
   }
 }
 
 /* ---------- 2. 結論 ---------- */
 
 function renderConclusion(){
-  var sens = headline('sensitivity');
+  var main = headline('main'), sens = headline('sensitivity');
   var total = STATE.muni.length;
   var dxinfoKnown = countBy(function(r){ return r._dxinfo !== null; });
   var popKnown = countBy(function(r){ return r._pop !== null; });
   var staffKnown = countBy(function(r){ return r._staff !== null; });
+  var eligible = names(function(r){ return r._eligible; });
   var vals = STATE.muni.filter(function(r){ return r._dxinfo !== null; })
                        .sort(function(a,b){ return b._dxinfo - a._dxinfo; });
   var hi = vals[0], lo = vals[vals.length-1];
-  var focus = STATE.muni.filter(function(r){ return r._isFocus; })[0];
+  var czTotal = 0, uncTotal = 0;
+  STATE.scoring.forEach(function(x){
+    if(x.status === '未確認') uncTotal++;
+    else if(String(x.status).indexOf('確認済み') !== -1) czTotal++;
+  });
+  var scoreSorted = STATE.muni.slice().sort(function(a,b){ return b._score - a._score; });
 
   var confirmed = [
-    '<b>DX・情報関係業務担当職員数は ' + dxinfoKnown + '/' + total + '市で確定した（確度A）。</b>' +
-      '総務省調査の同一定義・同一基準日（2024年4月1日）の値で、' +
+    '<b>5本のDeep Researchを正式統合し、11市×21項目＝231レコードを凍結ルーブリックで採点し直した。</b>' +
+      'Deep Research本文の得点候補（配点超過を含む）は採用せず、<code>data/scoring_rubric.csv</code> のみを正として' +
+      '「証拠 → ルーブリック条件 → 点数」の順で判定している。',
+    '<b>素点はトップが' + esc(scoreSorted[0]._name) + ' ' + fmt(scoreSorted[0]._score,1) + '点、' +
+      '最下位が' + esc(scoreSorted[scoreSorted.length-1]._name) + ' ' + fmt(scoreSorted[scoreSorted.length-1]._score,1) + '点。</b>' +
+      '公的資料に「未導入・機能なし・未実施」が明示された<b>確認済み0点は' + czTotal + '件</b>で、' +
+      '単に情報を確認できていない<b>未確認' + uncTotal + '件</b>とは区別して集計している。',
+    '<b>未確認率30%以下（主分析対象）は ' + eligible.length + '市</b>' +
+      (eligible.length ? '（' + esc(eligible.join('、')) + '）' : '') + '。' +
+      '第5回Deep Researchは6市が30%以下になると報告していたが、' +
+      '当該ファイルが末尾で途切れており<b>9市分の項目別根拠が届いていない</b>ため、' +
+      '根拠を確認できた項目だけで再計算するとこの結果になる。',
+    '<b>DX・情報関係業務担当職員数は ' + dxinfoKnown + '/' + total + '市で確定（確度A・2024年4月1日基準）。</b>' +
       '最多は' + esc(hi._name) + ' ' + hi._dxinfo + '人、最少は' + esc(lo._name) + ' ' + lo._dxinfo + '人。' +
-      '那覇市・宜野湾市・浦添市は同一資料に収録されているが本作業では未取得のため欠損。',
-    '<b>DX推進度は11市すべてを採点したが、全市が未確認率80%以上となった。</b>' +
-      '確度A・Bの一次資料根拠がある項目だけを採点する凍結ルールに従った結果であり、' +
-      '「取り組んでいない」という意味ではない。',
-    '<b>凍結ルール（未確認率30%超は主分析から除外）により、主分析の対象は0市となった。</b>' +
-      '参考値として全市を含めた感度分析では Pearson r = ' + (sens.r===null?'—':sens.r.toFixed(3)) +
-      '、Spearman ρ = ' + (sens.rho===null?'—':sens.rho.toFixed(3)) + '（n = ' + sens.n + '）。',
-    '<b>人口は ' + popKnown + '/' + total + '市、総職員数は ' + staffKnown + '/' + total + '市しか確定していない。</b>' +
-      'このため人口1万人あたり・職員100人あたりの補正分析は算出できない。'
+      '那覇市・宜野湾市・浦添市は同一資料に収録されているが値が未取得。',
+    '<b>人口は ' + popKnown + '/' + total + '市、普通会計職員数は ' + staffKnown + '/' + total + '市しか確定していない。</b>' +
+      'このため人口補正（指標B）・職員数補正（指標C）の相関は算出できない。'
   ];
 
   var implication = [
-    '<b>人員規模の把握という点では、実務上使える比較材料が揃った。</b>' +
-      '総務省の同一指標により、自団体が県内で相対的にどの位置にあるかを同じ物差しで確認できる。',
-    '<b>ただし「何人が適正か」を示す根拠にはならない。</b>' +
-      'DX推進度の側が未確認のため、人数と成果の対応関係が確認できていない。',
-    '<b>人数以外の変数を併せて検討する必要がある。</b>' +
-      'DX企画と情報システム運用が同一組織か（機能一体型／分離型）、BPR専管組織があるかは11市で差があり、' +
-      '同じ人数でも実質的にDX企画へ充てられる人員は異なる。'
+    '<b>増員の必要性を先に置いた結論は、現時点のデータからは導けない。</b>' +
+      '主分析の対が作れないため、人数とDX推進度の関係は正・無・負のいずれとも確定していない。',
+    '<b>一方、組織構造の差は事実として確認できる。</b>' +
+      'DX専管組織の有無、DX企画と情報システム運用の分離、BPR専管組織の有無、外部専門人材の任用は11市で明確に分かれており、' +
+      '同じ人数でも実質的にDX企画へ充てられる人員は異なる。',
+    '<b>総務省の広義人員は「県内で自団体がどの位置にあるか」を同一の物差しで示す材料にはなる。</b>' +
+      'ただし情報政策担当を含む合計値であり、DX専任人数として引用してはならない。'
   ];
 
   var cannot = [
-    '<b>因果関係は主張できない。</b>相関係数が得られても「人を増やせばDXが進む」とは言えない。' +
-      '本分析は2024年度の人員と2026年時点のDX推進状況を比較するラグ分析であり、逆因果を多少避けられる可能性はあるが、証明にはならない。',
-    '<b>感度分析の弱い負の値を「人員が多いほどDXが遅れている」と読んではならない。</b>' +
-      '未確認率が高い市ほどスコアが低く出る構造であり、この値は調査の到達度を反映している。' +
-      '実際、' + esc(hi._name) + 'は人員最多（' + hi._dxinfo + '人）だが未確認率' +
-      fmt(hi._unconfRate,0) + '%でスコアは' + fmt(hi._score,0) + '点である。',
+    '<b>因果関係は主張できない。</b>係数が得られても「人を増やせばDXが進む」とは言えない。' +
+      '本分析は2024年度の人員と2026年9月時点のDX推進状況を比較する約2年のラグ分析であり、逆因果を多少避けられる可能性はあるが証明にはならない。',
+    '<b>感度分析の値を主結論に使ってはならない。</b>' +
+      '感度分析（n = ' + sens.n + '、Pearson r = ' + (sens.r===null?'—':sens.r.toFixed(3)) +
+      '／Spearman ρ = ' + (sens.rho===null?'—':sens.rho.toFixed(3)) + '）の対象は全市が未確認率30%超であり、' +
+      'スコアは各市の取り組みの実態ではなく<b>調査の到達度</b>を強く反映している。',
     '<b>「確認できない」を「実施していない」と読み替えてはならない。</b>' +
-      'スコア0点の市は、取り組みが無いのではなく、確度A・Bの根拠を確認できていない市である。',
-    '<b>広義人員（総務省）を「DX専任人数」として引用してはならない。</b>情報政策担当を含む合計値である。'
+      '未確認' + uncTotal + '件は根拠を確認できていない項目であり、非実施を意味しない。' +
+      '非実施が公的資料で明示された項目は確認済み0点として別に数えている。',
+    '<b>有意でないことは「関係がない」ことを意味しない。</b>n が小さいため検出力が低く、中程度の関係があっても検出できない。'
   ];
 
   function box(cls, head, items){
@@ -517,6 +554,8 @@ function renderAnalysis(){
     document.getElementById('scopeSel').addEventListener('change', function(e){
       STATE.scope = e.target.value; renderAnalysis();
     });
+    var rt = document.getElementById('refToggle');
+    if(rt) rt.addEventListener('change', function(){ renderAnalysis(); });
   }
   var mKey = sel.value || MAIN_METRICS[0].key;
   var yKey = document.getElementById('scoreSel').value || '_score';
@@ -525,10 +564,19 @@ function renderAnalysis(){
   var p = pairsFor(mKey, yKey, scope);
 
   var box = document.getElementById('analysisBox');
-  if(p.used.length >= 3){
-    box.innerHTML = '<div class="chartbox">' + scatterSVG(p.used, metric, yKey) + '</div>' +
-      '<p class="tmeta">プロット ' + p.used.length + '市 ／ 欠損・対象外により除外 ' + p.excluded.length + '市' +
+  var showRef = scope === 'main' && document.getElementById('refToggle') &&
+                document.getElementById('refToggle').checked;
+  var refs = (scope === 'main' && showRef) ? p.refOnly : [];
+  if(p.used.length >= MAIN_MIN_N){
+    box.innerHTML = '<div class="chartbox">' + scatterSVG(p.used, metric, yKey, refs) + '</div>' +
+      '<p class="tmeta">' +
+      (scope === 'main'
+        ? '<b>主分析対象 ' + p.used.length + '市のみで回帰・相関を算出しています。</b>'
+        : '<b>これは感度分析（参考値）です。主結論には用いません。</b>') +
+      ' プロット ' + p.used.length + '市 ／ 欠損・対象外により除外 ' + p.excluded.length + '市' +
       (p.excluded.length ? '（' + esc(p.excluded.map(function(r){return r._name;}).join('、')) + '）' : '') +
+      (refs.length ? ' ／ 薄い灰色の点は<b>参考値自治体（未確認率30%超）' + refs.length +
+                     '市で、統計計算には含めていません</b>' : '') +
       '。欠損値は0として扱っていません。</p>';
   }else{
     box.innerHTML = shortageHTML(p, metric, scope);
@@ -544,9 +592,17 @@ function shortageHTML(p, metric, scope){
     {label:'総職員数',                  n:countBy(function(r){ return r._staff !== null; })},
     {label:'DX推進度（未確認率30%以下）', n:countBy(function(r){ return r._eligible; })}
   ];
+  var elig = names(function(r){ return r._eligible; });
+  var lack = STATE.muni.filter(function(r){ return r._eligible && r[metric.key] === null; })
+                       .map(function(r){ return r._name; });
   var why = scope === 'main'
-    ? '<b>主分析の対象市が3市未満です。</b>全11市が未確認率30%超のため、凍結ルール（methodology §6）により主分析から除外されています。上の「分析範囲」を「感度分析」に切り替えると参考値を表示します。'
-    : '<b>この指標の対を3件以上作れません。</b>「' + esc(metric.label) + '」の分母となるデータが不足しています。';
+    ? '<b>主分析の対象市が' + MAIN_MIN_N + '市未満です。</b>未確認率30%以下の市は ' +
+      elig.length + '市' + (elig.length ? '（' + esc(elig.join('、')) + '）' : '') + 'で、' +
+      (lack.length ? 'そのうち ' + lack.length + '市（' + esc(lack.join('、')) +
+        '）は「' + esc(metric.label) + '」が未取得のため対が作れません。<b>スコアが確定した市と人員が確定した市が重なっていない</b>ことが直接の原因です。'
+        : '凍結ルール（methodology §6）により他市は除外されています。') +
+      '上の「分析範囲」を「感度分析」に切り替えると参考値を表示します。'
+    : '<b>この指標の対を' + MAIN_MIN_N + '件以上作れません。</b>「' + esc(metric.label) + '」の分母となるデータが不足しています。';
   return '<div class="shortage"><h3>この組み合わせでは散布図を表示できません</h3><p>' + why +
     'これは「相関がない」という結果ではなく、<b>判定に必要な数値が揃っていない</b>という意味です。</p>' +
     '<div class="reqgrid">' + reqs.map(function(q){
@@ -554,18 +610,24 @@ function shortageHTML(p, metric, scope){
         '<div class="r-value num">' + q.n + '<span class="of"> / ' + total + '市</span></div>' +
         '<div class="bar"><i style="width:' + Math.round(q.n/total*100) + '%"></i></div></div>';
     }).join('') + '</div>' +
-    '<div class="nextstep"><b>あと何が分かれば仮説を検証できるか：</b><br>' +
-    '① DX推進度の未確認項目を一次資料で確認し、未確認率を30%以下に下げる（現在の最大のボトルネック）。<br>' +
-    '② 11市同一定義の人口と普通会計職員数を取得すれば、人口補正・職員数補正の分析が自動的に有効になります。<br>' +
-    '③ 総務省資料の Excel 1753／1754／1756行から那覇市・宜野湾市・浦添市の広義人員を取得すれば n=11 になります。</div></div>';
+    '<div class="nextstep"><b>あと何が分かれば仮説を検証できるか（優先順）：</b><br>' +
+    '① 総務省資料の Excel 1753／1754／1756行から<b>那覇市・宜野湾市・浦添市の広義人員</b>を取得する。' +
+    'この3市は現在スコアの確定度が最も高く、値が入れば主分析が直ちに成立します。<br>' +
+    '② J-LIS「コンビニ交付提供市区町村」一覧で<b>VI-2を11市分</b>確定する（現在は自治体名が特定できず9市が未確認）。<br>' +
+    '③ 総務省調査の工程表・KPI欄（I-4）と、III-4・VI-4・II-2 の自治体別確認を進める。<br>' +
+    '④ 11市同一定義の人口と普通会計職員数を取得すれば、人口補正・職員数補正の分析が自動的に有効になります。</div></div>';
 }
 
-function scatterSVG(rows, metric, yKey){
+function scatterSVG(rows, metric, yKey, refRows){
+  refRows = refRows || [];
   var W = 880, H = 430, m = {t:18, r:26, b:54, l:66};
   var xs = rows.map(function(r){ return r[metric.key]; });
   var ys = rows.map(function(r){ return r[yKey]; });
-  var xMin = Math.min.apply(null, xs), xMax = Math.max.apply(null, xs);
-  var yMin = Math.min.apply(null, ys), yMax = Math.max.apply(null, ys);
+  /* 軸の範囲は参考値も収まるように取るが、回帰・相関は主分析対象のみで計算する */
+  var axs = xs.concat(refRows.map(function(r){ return r[metric.key]; }));
+  var ays = ys.concat(refRows.map(function(r){ return r[yKey]; }));
+  var xMin = Math.min.apply(null, axs), xMax = Math.max.apply(null, axs);
+  var yMin = Math.min.apply(null, ays), yMax = Math.max.apply(null, ays);
   var padX = (xMax - xMin) * 0.12 || Math.max(1, Math.abs(xMax) * 0.1);
   var padY = (yMax - yMin) * 0.12 || Math.max(1, Math.abs(yMax) * 0.1);
   xMin -= padX; xMax += padX; yMin -= padY; yMax += padY;
@@ -608,6 +670,15 @@ function scatterSVG(rows, metric, yKey){
            '" x2="'+sx(xMax).toFixed(1)+'" y2="'+sy(b0+b1*xMax).toFixed(1)+'"/>';
     }
   }
+  /* 参考値自治体（未確認率30%超）。薄く別マーカーで描き、統計には含めない。 */
+  refRows.forEach(function(r){
+    var cx = sx(r[metric.key]), cy = sy(r[yKey]);
+    s += '<circle class="pt is-ref" cx="'+cx.toFixed(1)+'" cy="'+cy.toFixed(1)+'" r="4.5">' +
+         '<title>'+esc(r._name)+'（参考値・主分析対象外）\n'+esc(metric.label)+': '+fmt(r[metric.key])+
+         '\nDX推進度: '+fmt(r[yKey],1)+'\n未確認率: '+fmt(r._unconfRate,1)+'%</title></circle>';
+    s += '<text class="lbl is-ref" x="'+(cx+7).toFixed(1)+'" y="'+(cy+3.5).toFixed(1)+'">'+esc(r._name)+'</text>';
+  });
+
   /* ラベルの重なり回避：既に置いたラベルと近接する場合は下方向へずらす */
   var placed = [];
   function labelY(cx, cy){
@@ -692,6 +763,15 @@ function renderFocus(){
       stat('DX専任組織', (org?org.name:'不明'), esc(txt(f.dedicated_dx_org))) +
       stat('DX推進度 素点', fmt(f._score,1)+'<span class="of"> / 100</span>', '未確認率 '+fmt(f._unconfRate,1)+'%') +
     '</div>' +
+    (f._fieldTeam === null ? '' :
+      '<div class="banner" style="margin-top:14px"><p><b>人員は定義の異なる2つの指標を分けて読む必要がある。</b></p>' +
+      '<ul style="margin:6px 0 0 18px">' +
+      '<li><b>2024年度 総務省広義人員：' + fmt(f._dxinfo) + '人</b> — ' +
+        'DX推進担当課室と情報政策担当課室の合計（同一定義で県内比較できる唯一の指標）</li>' +
+      '<li><b>' + esc(txt(f.field_team_fiscal_year)) + ' DX推進実働体制：' + fmt(f._fieldTeam) + '人</b>' +
+        '（前年度3人）— ' + esc(txt(f.field_team_note)) + '</li></ul>' +
+      '<p style="margin-top:8px">両者は<b>集計範囲も基準日も異なるため、増減として接続してはならない</b>。' +
+      '後者は公開一次資料で確認できていないため、県内比較の統計には投入していない。</p></div>') +
     '<p class="hint">' + esc(FOCUS_CITY) + 'は「' + (org?org.name:'不明') + '」かつ「' + FUNC_LABEL[f._funcType] + '」。' +
     'DX専管組織を置かず情報政策課（ＩＴ推進係・システム管理係）が所掌しているため、' +
     '広義人員' + (f._dxinfo===null?'':fmt(f._dxinfo)+'人') + 'のうちDX企画に充てられる人数は本数値からは分からない。' +
@@ -770,13 +850,41 @@ function renderTypology(){
   }).join('');
   document.getElementById('typology').innerHTML = html;
 
+  /* 組織構造の定性比較（新たなスコアは作らない。CSVの事実をそのまま並べる） */
+  var OC = [
+    {label:'DX専管組織', get:function(r){ return txt(r.dedicated_dx_org); }},
+    {label:'DXと情報システム運用の分離', get:function(r){ return FUNC_LABEL[r._funcType]; }},
+    {label:'BPR・業務改善組織', get:function(r){ return txt(r.bpr_department); }},
+    {label:'DX＋BPR一体型', get:function(r){ return txt(r.dx_bpr_integrated); }},
+    {label:'外部専門人材', get:function(r){ return txt(r.external_expert); }},
+    {label:'情報政策課兼務型', get:function(r){
+        return r._orgGroup === 'concurrent' ? '該当' : (r._orgGroup === 'dedicated' ? '非該当' : '要確認'); }}
+  ];
+  var ocEl = document.getElementById('orgmatrix');
+  if(ocEl){
+    ocEl.innerHTML = '<table><thead><tr><th class="stick">観点</th>' +
+      STATE.muni.map(function(r){
+        return '<th' + (r._isFocus && STATE.focusOn ? ' class="is-focus"' : '') + '>' + esc(r._name) + '</th>';
+      }).join('') + '</tr></thead><tbody>' +
+      OC.map(function(c){
+        return '<tr><td class="stick">' + c.label + '</td>' +
+          STATE.muni.map(function(r){
+            var v = c.get(r);
+            return '<td' + (isMissing(v) ? ' class="missing"' : '') +
+                   (r._isFocus && STATE.focusOn ? ' style="background:var(--focus-bg,#fff8e6)"' : '') +
+                   '>' + esc(v) + '</td>';
+          }).join('') + '</tr>';
+      }).join('') + '</tbody></table>';
+  }
+
   var integ = names(function(r){ return r._funcType === 'integrated'; });
   var sep   = names(function(r){ return r._funcType === 'separated'; });
   document.getElementById('typonote').innerHTML =
     '<b>機能一体型（' + integ.length + '市）</b>：' + joinNames(integ) + ' — DX企画と情報システム運用が同一組織。広義人員のうちDX企画に充てられる人数は本数値からは分離できない。<br>' +
     '<b>機能分離型（' + sep.length + '市）</b>：' + joinNames(sep) + ' — 両機能が別組織。<br>' +
-    '同じ人数でも実質的な体制は異なるため、<b>人数の比較だけでは体制の厚さを評価できない</b>。' +
-    'ただしDX推進度側の確認が不足しているため、<b>類型による推進状況の差は現時点では検証できていない</b>。';
+    '同じ人数でも実質的な体制は異なるため、<b>人数の比較だけでは体制の厚さを評価できない</b>。<br>' +
+    'これらは<b>定性的な比較であり、新たなスコアは作っていない</b>。' +
+    '未確認率が市によって大きく異なるため、<b>類型ごとのDX推進度の差を統計的に検証できる段階にはない</b>。';
 }
 
 /* ---------- 9. 市別比較表 ---------- */
