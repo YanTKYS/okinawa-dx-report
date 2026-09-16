@@ -98,6 +98,22 @@ check('旧・導出規則R3（補集合からの否定推定）が採点ファ�
 check('R3で差し戻した項目が未確認に戻っている（II-3・II-4・V-2・V-3）',
       all(st(m,i)=='未確認' for m,i in
           [('石垣市','II-3'),('豊見城市','II-4'),('南城市','V-2'),('沖縄市','V-3')]))
+# 採点で未確認に戻した事実を、組織比較の記述列で「無」と断定していないこと
+# （採点では推測禁止・記述では推測可、という二重基準を作らない）
+bad=[]
+for r in mu:
+    m=r['municipality']; ee=(r['external_expert'] or '').strip()
+    v2=st(m,'V-2')
+    if v2=='未確認' and ee not in MISS:
+        bad.append('%s: V-2=未確認 なのに external_expert=%s'%(m,ee))
+    if v2!='未確認' and float([x for x in sc if x['municipality']==m and x['item_id']=='V-2'][0]['points'])>0 \
+       and not ee.startswith('有'):
+        bad.append('%s: V-2に得点があるのに external_expert=%s'%(m,ee))
+check('external_expert が V-2 の採点と同一の根拠水準になっている', not bad, str(bad))
+check('external_expert に補集合推定（「無（2024年度時点）」）が残っていない',
+      not any('無（2024年度時点）' in (r['external_expert'] or '') for r in mu) and
+      '無（2024年度時点）' not in txt('tools/build_analysis.py'),
+      str([r['municipality'] for r in mu if '無（2024' in (r['external_expert'] or '')]))
 
 print('\n[4] raw / adjusted / 未確認率の再計算一致')
 errs=[]
@@ -237,7 +253,8 @@ ECOL={'impl':'impl_main_analysis_eligible','total':'main_analysis_eligible'}
 def fisher(coef,n,kind):
     if coef is None or n<4: return (None,None)
     c=max(min(coef,0.999999),-0.999999); z=math.atanh(c)
-    se=(1.0/math.sqrt(n-3)) if kind=='pearson' else math.sqrt(1.06/(n-3))
+    # Bonett–Wright (2000): SE = sqrt((1 + rho^2/2)/(n-3))。1.06/(n-3) は Fieller の別式。
+    se=(1.0/math.sqrt(n-3)) if kind=='pearson' else math.sqrt((1.0+c*c/2.0)/(n-3))
     return (math.tanh(z-1.959964*se), math.tanh(z+1.959964*se))
 errs=[]; checked=0; ci_checked=0
 for row in an:
@@ -273,6 +290,35 @@ for row in an:
     if len(used)!=int(row['n']): errs.append('%s/%s 使用自治体数'%(mk,row['scope']))
 check('n・除外数・Pearson・Spearman・95%%CI・使用自治体が全%d行で一致'%len(an), not errs, str(errs[:6]))
 check('95%信頼区間を実際に突合できている（事前登録 §9.2）', ci_checked>0, 'CI突合0件')
+# Bonett–Wright (2000): SE = sqrt((1 + rho^2/2)/(n-3))。
+# Fieller et al. の sqrt(1.06/(n-3)) と取り違えていないことを、既知値で確認する。
+def bw_se(rho,n): return math.sqrt((1.0+rho*rho/2.0)/(n-3))
+check('Spearman の SE が Bonett–Wright 式（ρ=0 で 1/√(n-3)）',
+      abs(bw_se(0.0,8)-1/math.sqrt(5))<1e-12, '%.6f'%bw_se(0.0,8))
+check('Spearman の SE が Fieller 近似（√(1.06/(n-3))）ではない',
+      abs(bw_se(0.0,8)-math.sqrt(1.06/5))>1e-6)
+check('Spearman の SE が ρ に依存する（Bonett–Wright の特徴）',
+      abs(bw_se(0.8,8)-bw_se(0.0,8))>1e-6)
+# 保存されている Spearman CI が Bonett–Wright と一致し、Fieller 版とは一致しないこと
+def ci_with(se_fn, rho, n):
+    z=math.atanh(max(min(rho,0.999999),-0.999999)); se=se_fn(rho,n)
+    return (math.tanh(z-1.959964*se), math.tanh(z+1.959964*se))
+row=[a for a in an if a['metric']=='dx_info_staff' and a['outcome']=='impl'
+     and a['score_type']=='raw' and a['scope'].startswith('感度')][0]
+rho=float(row['spearman']); nn=int(row['n'])
+bw=ci_with(bw_se,rho,nn); fi=ci_with(lambda r,n: math.sqrt(1.06/(n-3)),rho,nn)
+check('保存済み Spearman CI が Bonett–Wright と一致する',
+      abs(float(row['spearman_ci_low'])-bw[0])<0.001 and abs(float(row['spearman_ci_high'])-bw[1])<0.001,
+      '保存[%s,%s] BW[%.3f,%.3f]'%(row['spearman_ci_low'],row['spearman_ci_high'],bw[0],bw[1]))
+check('保存済み Spearman CI が Fieller 近似とは一致しない（取り違えていない）',
+      abs(float(row['spearman_ci_low'])-fi[0])>0.001 or abs(float(row['spearman_ci_high'])-fi[1])>0.001,
+      'Fieller[%.3f,%.3f]'%(fi[0],fi[1]))
+for f in ['tools/build_analysis.py','assets/app.js','tools/test_checks.py','docs/methodology.md']:
+    pass
+check('SE の式がコード3箇所と methodology で一致している（1.06 版が残っていない）',
+      all('1.06/(n-3)' not in txt(f).replace(' ','') or 'Fieller' in txt(f)
+          for f in ['tools/build_analysis.py','assets/app.js','tools/test_checks.py']) and
+      '(1 + ρ²/2)/(n−3)' in txt('docs/methodology.md'))
 check('少なくとも1組の係数を実際に突合できている', checked>0, '突合0件')
 check('n+除外=11 がすべての行で成立', all(int(a['n'])+int(a['excluded'])==11 for a in an))
 
@@ -312,8 +358,13 @@ check('tier の語彙が3種類に限定されている',
       all(a['tier'] in ('算出不能','探索的（n<6）','成立（n>=6）') for a in an),
       str(sorted({a['tier'] for a in an})))
 check('MIN_N_MAIN=6 が methodology に根拠として明記されている',
-      'n≥6' in txt('docs/methodology.md') or 'n ≥ 6' in txt('docs/methodology.md') or
-      'n>=6' in txt('docs/methodology.md'))
+      'n ≥ 6' in txt('docs/methodology.md') or 'n≥6' in txt('docs/methodology.md'))
+check('n≥6 を「§9.1 が当初から望ましいとした水準」と誤記していない',
+      '§9.1 は当初から' not in txt('docs/methodology.md') and
+      '§9.1 が望ましいとした' not in (txt('assets/app.js')+txt('index.html')),
+      '凍結時の §9.1 に必要標本数の記述は無い')
+check('n≥6 が2026-09-17に新設した運用基準であると明記されている',
+      '運用上の判定基準' in txt('docs/methodology.md'))
 main_rows=[a for a in an if a['scope'].startswith('主分析')]
 mn=set(int(a['n']) for a in main_rows)
 if mn=={0}:

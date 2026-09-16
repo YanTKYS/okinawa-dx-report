@@ -19,7 +19,7 @@ var DATA_FILES = {
 };
 
 var MIN_N_CALC = 3;   /* 相関を算出できる最小の対 */
-var MIN_N_MAIN = 6;   /* methodology §9.1 が望ましいとした水準。これ未満は「探索的」と表示し主分析と呼ばない */
+var MIN_N_MAIN = 6;   /* methodology §9.2.1 の運用基準（2026-09-17 新設）。これ未満は「探索的」と表示し主分析と呼ばない */
 
 var FOCUS_CITY = '糸満市';   /* 本調査の利用主体。強調のみで、評価・統計処理は一切変えない */
 
@@ -223,13 +223,15 @@ function rankAvg(arr){
 function spearman(xs, ys){ if(xs.length < 3) return null; return pearson(rankAvg(xs), rankAvg(ys)); }
 
 /* Fisher z変換による95%信頼区間（methodology §9.2 で事前登録）。
-   Pearson  SE = 1/sqrt(n-3) ／ Spearman SE = sqrt(1.06/(n-3))（Bonett–Wright）。
+   Pearson  SE = 1/sqrt(n-3)
+   Spearman SE = sqrt((1 + rho^2/2)/(n-3))  … Bonett–Wright (2000)
+            ※ sqrt(1.06/(n-3)) は Fieller et al. の近似であり別式。
    n が小さいほど区間は極端に広くなる。区間が0をまたぐ場合、符号すら確定していない。 */
 function fisherCI(coef, n, kind){
   if(coef === null || coef === undefined || n < 4) return null;
   var c = Math.max(Math.min(coef, 0.999999), -0.999999);
   var z = Math.atanh ? Math.atanh(c) : 0.5 * Math.log((1+c)/(1-c));
-  var se = (kind === 'pearson') ? 1/Math.sqrt(n-3) : Math.sqrt(1.06/(n-3));
+  var se = (kind === 'pearson') ? 1/Math.sqrt(n-3) : Math.sqrt((1 + c*c/2)/(n-3));
   function th(x){ return Math.tanh ? Math.tanh(x) : (Math.exp(2*x)-1)/(Math.exp(2*x)+1); }
   return [th(z - 1.959964*se), th(z + 1.959964*se)];
 }
@@ -406,7 +408,7 @@ function renderSummary(){
     badge.className = 'kpi alert';
     badge.innerHTML = '<div class="k-label">現時点の結論（仮説H1：人的体制が厚いほどDXが進んでいる）</div>' +
       '<div class="k-value">探索的な値しか出せない（n = ' + main.n + '）</div>' +
-      '<div class="k-note">methodology §9.1 が望ましいとした n≥' + MIN_N_MAIN +
+      '<div class="k-note">methodology §9.2.1 の運用基準 n≥' + MIN_N_MAIN +
       ' に達していないため、<b>主分析とは呼ばない</b>。信頼区間は ' + ciText(main.rci) + '。</div>';
   }else{
     badge.className = 'kpi alert';
@@ -662,7 +664,7 @@ function renderAnalysis(){
       '<p class="tmeta">' +
       (scope === 'main'
         ? (p.used.length < MIN_N_MAIN
-             ? '<b>n = ' + p.used.length + ' は methodology §9.1 の望ましい水準（n≥' + MIN_N_MAIN +
+             ? '<b>n = ' + p.used.length + ' は methodology §9.2.1 の運用基準（n≥' + MIN_N_MAIN +
                '）に達していないため、これは<u>探索的</u>な表示です。主分析とは呼びません。</b>'
              : '<b>主分析対象 ' + p.used.length + '市のみで回帰・相関を算出しています。</b>')
         : '<b>これは感度分析（参考値）です。主結論には用いません。</b>' +
@@ -813,7 +815,7 @@ function renderCorrelation(yKey, scope){
       ? '（主分析の被説明変数。人的・組織体制そのものを測る項目を除いた部分尺度）'
       : '（<b>参考</b>。説明変数と構成概念が重複する I-3・IV-1・V-2・V-3 等を含むため主結論に用いない）') +
     '／範囲：' + (scope==='main' ? '主分析（未確認率30%以下）' : '感度分析（参考値を含む全市）') +
-    '。95%信頼区間は Fisher z 変換（Spearman は Bonett–Wright）による。</p>';
+    '。95%信頼区間は Fisher z 変換による（Spearman は Bonett–Wright: SE=√((1+ρ²/2)/(n−3))）。</p>';
 
   var html = head + availableMetrics().map(function(m){
     var p = pairsFor(m.key, yKey, scope);
