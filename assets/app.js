@@ -21,7 +21,10 @@ var DATA_FILES = {
 var MIN_N_CALC = 3;   /* 相関を算出できる最小の対 */
 var MIN_N_MAIN = 6;   /* methodology §9.2.1 の運用基準（2026-09-17 新設）。これ未満は「探索的」と表示し主分析と呼ばない */
 
-var FOCUS_CITY = '糸満市';   /* 本調査の利用主体。強調のみで、評価・統計処理は一切変えない */
+/* 「注目する市」の選択。閲覧者が municipalities.csv の11市から任意に選ぶ。
+   強調表示のみで、並び順・評価・分析対象・統計処理は一切変えない。
+   URL の ?city=<自治体コード> で共有できる（未指定・不正値は全市＝強調なし）。 */
+var FOCUS_PARAM = 'city';
 
 var MISSING_TOKENS = ['', '-', '—', '–', '不明', '未評価', '未採点', '未確認',
   '確認不能', '該当なし', '未調査', '未取得', '算出不能', 'N/A', 'n/a', 'NA', 'null', 'undefined'];
@@ -54,13 +57,13 @@ var CONF_DESC = {
 
 /* methodology.md §9.6 の事前登録ペア。結果に合わせて変更しない。 */
 var PRESET_PAIRS = [
-  {a:'糸満市',  b:'豊見城市', note:'本島南部・同規模。情報政策課兼務型 ⇔ デジタル推進課設置', featured:true},
+  {a:'糸満市',  b:'豊見城市', note:'本島南部・同規模。情報政策課兼務型 ⇔ デジタル推進課設置'},
   {a:'沖縄市',  b:'うるま市', note:'本島中部・同規模。機能分離型 ⇔ 機能一体型'},
   {a:'浦添市',  b:'宜野湾市', note:'本島中南部・同規模。分担型 ⇔ 単独課型'},
   {a:'石垣市',  b:'宮古島市', note:'離島・同規模。専管課あり ⇔ 情報政策課兼務'}
 ];
 
-var STATE = {muni:[], evidence:[], rubric:[], scoring:[], focusOn:true,
+var STATE = {muni:[], evidence:[], rubric:[], scoring:[], focus:null,
              sort:{key:'_code', dir:1}, scope:'sensitivity'};
 
 /* ============================ CSV ============================ */
@@ -182,7 +185,6 @@ function derive(rows){
     else                                                   r._funcType = 'separated';
 
     r._hasBpr = !isMissing(r.bpr_department);
-    r._isFocus = (r._name === FOCUS_CITY);
     return r;
   });
 }
@@ -194,6 +196,86 @@ var ORG_GROUPS = [
 ];
 var FUNC_LABEL = {'separated':'機能分離型','integrated':'機能一体型',
                   'split-dept':'分担型（複数部署）','unknown':'要確認'};
+
+/* ============================ 注目する市 ============================ */
+
+/* STATE.focus は自治体コード（数値）または null（全市・強調なし） */
+function isFocus(r){ return STATE.focus !== null && r._code === STATE.focus; }
+function focusRow(){ return STATE.muni.filter(isFocus)[0] || null; }
+function focusTr(r){ return isFocus(r) ? '<tr class="is-focus">' : '<tr>'; }
+
+/* URL の city パラメータを municipalities.csv の自治体コードと照合する。不正・未対応は null */
+function rawCityParam(){
+  try{ return new URLSearchParams(location.search).get(FOCUS_PARAM); }catch(e){ return null; }
+}
+function codeFromURL(){
+  var v = rawCityParam();
+  if(v === null || !/^\d+$/.test(v.trim())) return null;
+  var c = parseInt(v, 10);
+  return STATE.muni.some(function(r){ return r._code === c; }) ? c : null;
+}
+/* city パラメータだけを書き換え、他のパラメータとページ内アンカーは保持する */
+function writeURL(code, push){
+  try{
+    var u = new URL(location.href);
+    if(code === null) u.searchParams.delete(FOCUS_PARAM);
+    else u.searchParams.set(FOCUS_PARAM, String(code));
+    history[push ? 'pushState' : 'replaceState'](history.state, '', u.pathname + u.search + u.hash);
+  }catch(e){ /* file:// 等で履歴APIが使えない場合は表示だけ切り替える */ }
+}
+
+function initFocusPicker(){
+  var sel = document.getElementById('focusSel');
+  STATE.muni.forEach(function(r){
+    if(r._code === null) return;
+    var o = document.createElement('option');
+    o.value = String(r._code); o.textContent = r._name;
+    sel.appendChild(o);
+  });
+  STATE.focus = codeFromURL();
+  /* 不正・未対応コードは全市表示とし、URLからも外して表示と一致させる */
+  if(rawCityParam() !== null && STATE.focus === null) writeURL(null, false);
+  sel.value = STATE.focus === null ? '' : String(STATE.focus);
+  sel.addEventListener('change', function(){
+    var c = sel.value === '' ? null : parseInt(sel.value, 10);
+    if(c === STATE.focus) return;
+    STATE.focus = c; writeURL(c, true); applyFocus();
+  });
+  /* 戻る・進む。ページ内アンカー移動でも発火するため、選択が変わったときだけ再描画する */
+  window.addEventListener('popstate', function(){
+    var c = codeFromURL();
+    if(c === STATE.focus) return;
+    STATE.focus = c;
+    sel.value = c === null ? '' : String(c);
+    applyFocus();
+  });
+}
+
+/* 選択変更時の再描画。閲覧中のセクション位置と、開いている詳細（details）を保つ */
+function applyFocus(){
+  var open = Array.prototype.filter.call(document.querySelectorAll('details[data-key]'),
+               function(d){ return d.open; }).map(function(d){ return d.getAttribute('data-key'); });
+  var secs = document.querySelectorAll('main section'), anchor = null, top = 0, i;
+  for(i = 0; i < secs.length; i++){
+    var b = secs[i].getBoundingClientRect();
+    if(b.bottom > 60){ anchor = secs[i]; top = b.top; break; }
+  }
+  renderFocusSections();
+  Array.prototype.forEach.call(document.querySelectorAll('details[data-key]'), function(d){
+    if(open.indexOf(d.getAttribute('data-key')) !== -1) d.open = true;
+  });
+  if(anchor){
+    var d = anchor.getBoundingClientRect().top - top;
+    if(Math.abs(d) > 1) window.scrollBy(0, d);
+  }
+}
+
+function renderFocusLabel(){
+  var f = focusRow(), el = document.getElementById('focusPrint');
+  if(el) el.innerHTML = f ? '注目する市：<b>' + esc(f._name) + '</b>（強調表示のみ。評価・統計処理は全市共通）' : '';
+  var pick = document.getElementById('focusPick');
+  if(pick) pick.classList.toggle('on', !!f);
+}
 
 /* ============================ 統計 ============================ */
 
@@ -312,6 +394,7 @@ function boot(){
   .then(function(res){
     STATE.muni = derive(res[0]); STATE.evidence = res[1];
     STATE.rubric = res[2];       STATE.scoring = res[3];
+    initFocusPicker();
     renderAll();
   }).catch(showLoadError);
 }
@@ -333,17 +416,23 @@ function showLoadError(err){
 /* ============================ 描画 ============================ */
 
 function renderAll(){
-  renderSummary(); renderConclusion(); renderStaffing(); renderScoring();
-  renderAnalysis(); renderFocus(); renderPairs(); renderTypology();
-  renderTable(); renderCoverage(); renderConfidence(); renderEvidence(); renderFooterMeta();
+  renderSummary(); renderConclusion(); renderFocusSections();
+  renderConfidence(); renderFooterMeta();
   initScrollSpy();
   if(location.hash){ var t = document.querySelector(location.hash); if(t) t.scrollIntoView(); }
+}
+
+/* 注目する市の選択に応じて表示が変わるセクション。統計値はいずれも選択に依存しない */
+function renderFocusSections(){
+  renderStaffing(); renderScoring(); renderAnalysis(); renderFocus(); renderPairs();
+  renderTypology(); renderTable(); renderCoverage(); renderEvidence(); renderFocusLabel();
 }
 
 function countBy(p){ return STATE.muni.filter(p).length; }
 function names(p){ return STATE.muni.filter(p).map(function(r){ return r._name; }); }
 function joinNames(a){
-  return a.map(function(n){ return n === FOCUS_CITY ? '<b>' + esc(n) + '</b>' : esc(n); }).join('、');
+  var f = focusRow();
+  return a.map(function(n){ return (f && n === f._name) ? '<b>' + esc(n) + '</b>' : esc(n); }).join('、');
 }
 
 /* 既定の相関：広義絶対人数 × 実装成果スコア（主分析の被説明変数） */
@@ -522,7 +611,7 @@ function renderStaffing(){
     rows.map(function(r){
       var bar = r._dxinfo === null ? '<span class="chip miss">総務省値 未取得</span>'
         : '<span class="hbar"><i style="width:' + (r._dxinfo/maxV*100).toFixed(1) + '%"></i></span>';
-      return '<tr' + (r._isFocus && STATE.focusOn ? ' class="is-focus"' : '') + '>' +
+      return focusTr(r) +
         '<td class="stick">' + esc(r._name) + '</td><td>' + bar + '</td>' +
         '<td class="n' + (r._dxinfo===null?' missing':'') + '">' + (r._dxinfo===null?'不明':fmt(r._dxinfo)+'人') + '</td>' +
         '<td class="n' + (r._dxinfoPer10k===null?' missing':'') + '">' + (r._dxinfoPer10k===null?'不明':fmt(r._dxinfoPer10k,2)) + '</td>' +
@@ -543,7 +632,7 @@ function renderStaffing(){
       '<th>DX・BPR統合部署</th><th>情報政策担当課室</th></tr></thead><tbody>' +
       sub.map(function(r){
         function c(v){ return '<td class="n' + (v===null?' missing':'') + '">' + (v===null?'不明':fmt(v)+'人') + '</td>'; }
-        return '<tr' + (r._isFocus && STATE.focusOn ? ' class="is-focus"' : '') + '>' +
+        return focusTr(r) +
           '<td class="stick">' + esc(r._name) + '</td>' +
           '<td style="white-space:nowrap">' + esc(txt(r.dx_staff_fiscal_year)) + '</td>' +
           c(r._dx) + c(r._bpr) + c(r._infra) + c(r._combined) + c(r._infoDept) + '</tr>';
@@ -569,7 +658,7 @@ function renderScoring(){
     '<tr><th>素点</th><th>補正</th><th>未確認率</th><th>主分析</th>' +
     '<th>素点</th><th>補正</th><th>未確認率</th><th>30%以下</th></tr></thead><tbody>' +
     rows.map(function(r){
-      return '<tr' + (r._isFocus && STATE.focusOn ? ' class="is-focus"' : '') + '>' +
+      return focusTr(r) +
         '<td class="stick">' + esc(r._name) + '</td>' +
         '<td class="n" style="background:#f4f7fa">' + fmt(r._impl,1) + '</td>' +
         '<td class="n' + (r._implA===null?' missing':'') + '" style="background:#f4f7fa">' +
@@ -673,11 +762,21 @@ function renderAnalysis(){
       (p.excluded.length ? '（' + esc(p.excluded.map(function(r){return r._name;}).join('、')) + '）' : '') +
       (refs.length ? ' ／ 薄い灰色の点は<b>参考値自治体（未確認率30%超）' + refs.length +
                      '市で、統計計算には含めていません</b>' : '') +
-      '。欠損値は0として扱っていません。</p>';
+      '。欠損値は0として扱っていません。' + focusPlotNote(p, refs) + '</p>';
   }else{
     box.innerHTML = shortageHTML(p, metric, scope);
   }
   renderCorrelation(yKey, scope);
+}
+
+/* 選択市が散布図に描かれていない場合の理由。強調のみで分析対象は変えない */
+function focusPlotNote(p, refs){
+  var f = focusRow();
+  if(!f || p.used.indexOf(f) !== -1) return '';
+  return ' <b>注目する市（' + esc(f._name) + '）</b>は' +
+    (refs.indexOf(f) !== -1 ? '参考値（統計計算の対象外）として表示しています。'
+     : (p.refOnly.indexOf(f) !== -1 ? '未確認率30%超のため主分析の対象外です（参考値自治体の表示で確認できます）。'
+                                     : 'この組み合わせの値が欠損または対象外のため表示していません。'));
 }
 
 function shortageHTML(p, metric, scope){
@@ -772,12 +871,12 @@ function scatterSVG(rows, metric, yKey, refRows){
   }
   /* 参考値自治体（未確認率30%超）。薄く別マーカーで描き、統計には含めない。 */
   refRows.forEach(function(r){
-    var cx = sx(r[metric.key]), cy = sy(r[yKey]);
-    s += '<circle class="pt is-ref" cx="'+cx.toFixed(1)+'" cy="'+cy.toFixed(1)+'" r="4.5">' +
+    var cx = sx(r[metric.key]), cy = sy(r[yKey]), f = isFocus(r);
+    s += '<circle class="pt is-ref'+(f?' focus':'')+'" cx="'+cx.toFixed(1)+'" cy="'+cy.toFixed(1)+'" r="'+(f?6:4.5)+'">' +
          '<title>'+esc(r._name)+'（参考値・主分析対象外）\n'+esc(metric.label)+': '+fmt(r[metric.key])+
          '\n'+esc(Y_LABEL[yKey]||'DX推進度')+': '+fmt(r[yKey],1)+
          '\n未確認率: '+fmt(r[outcomeOf(yKey).rateKey],1)+'%</title></circle>';
-    s += '<text class="lbl is-ref" x="'+(cx+7).toFixed(1)+'" y="'+(cy+3.5).toFixed(1)+'">'+esc(r._name)+'</text>';
+    s += '<text class="lbl is-ref'+(f?' focus':'')+'" x="'+(cx+7).toFixed(1)+'" y="'+(cy+3.5).toFixed(1)+'">'+esc(r._name)+'</text>';
   });
 
   /* ラベルの重なり回避：既に置いたラベルと近接する場合は下方向へずらす */
@@ -791,7 +890,7 @@ function scatterSVG(rows, metric, yKey, refRows){
     return y;
   }
   rows.forEach(function(r){
-    var cx = sx(r[metric.key]), cy = sy(r[yKey]), f = r._isFocus && STATE.focusOn;
+    var cx = sx(r[metric.key]), cy = sy(r[yKey]), f = isFocus(r);
     s += '<circle class="pt'+(f?' focus':'')+'" cx="'+cx.toFixed(1)+'" cy="'+cy.toFixed(1)+'" r="'+(f?6.5:5)+'">' +
          '<title>'+esc(r._name)+'\n'+esc(metric.label)+': '+fmt(r[metric.key])+
          '\n'+esc(Y_LABEL[yKey]||'DX推進度')+': '+fmt(r[yKey],1)+
@@ -801,8 +900,7 @@ function scatterSVG(rows, metric, yKey, refRows){
       s += '<line class="lead" x1="'+(cx+5).toFixed(1)+'" y1="'+cy.toFixed(1)+
            '" x2="'+(cx+7).toFixed(1)+'" y2="'+(ly-3.5).toFixed(1)+'"/>';
     }
-    s += '<text class="lbl" x="'+(cx+8).toFixed(1)+'" y="'+ly.toFixed(1)+'"'+
-         (f?' style="font-weight:700;fill:var(--focus)"':'')+'>'+esc(r._name)+'</text>';
+    s += '<text class="lbl'+(f?' focus':'')+'" x="'+(cx+8).toFixed(1)+'" y="'+ly.toFixed(1)+'">'+esc(r._name)+'</text>';
   });
   return s + '</svg>';
 }
@@ -854,39 +952,76 @@ function renderCorrelation(yKey, scope){
   document.getElementById('corrgrid').innerHTML = html;
 }
 
-/* ---------- 6. 糸満市の位置 ---------- */
+/* ---------- 6. 選択市の相対的位置 ---------- */
+
+/* 選択市の組織構造に関する説明。CSVの分類結果だけから組み立て、市固有の文言は持たない */
+var FUNC_NOTE = {
+  'integrated': 'DX企画と情報システム運用が同一組織であり、広義人員のうちDX企画に充てられる人数は本数値からは分離できない。',
+  'separated':  'DX企画と情報システム運用が別組織である。広義人員は両担当課室の合計であり、DX企画の人数そのものではない。',
+  'split-dept': 'DX担当が複数の部署に分かれており、広義人員を部署別・職務別に按分することはできない。',
+  'unknown':    '情報政策担当部署の情報が不足しており、DX企画と情報システム運用の分離状況は分類できない。'
+};
 
 function renderFocus(){
-  var f = STATE.muni.filter(function(r){ return r._isFocus; })[0];
-  if(!f){ document.getElementById('focusBox').innerHTML = ''; return; }
-  var known = STATE.muni.filter(function(r){ return r._dxinfo !== null; })
-                        .sort(function(a,b){ return b._dxinfo - a._dxinfo; });
-  var rank = known.map(function(r){ return r._name; }).indexOf(f._name) + 1;
+  var box = document.getElementById('focusBox');
+  var known = STATE.muni.filter(function(r){ return r._dxinfo !== null; });
   var vals = known.map(function(r){ return r._dxinfo; });
-  var med = (function(a){ var s=a.slice().sort(function(x,y){return x-y;}), k=Math.floor(s.length/2);
-             return s.length%2 ? s[k] : (s[k-1]+s[k])/2; })(vals);
-  var mean = vals.reduce(function(a,b){return a+b;},0)/vals.length;
+  var med = vals.length ? (function(a){ var s=a.slice().sort(function(x,y){return x-y;}), k=Math.floor(s.length/2);
+             return s.length%2 ? s[k] : (s[k-1]+s[k])/2; })(vals) : null;
+  var mean = vals.length ? vals.reduce(function(a,b){return a+b;},0)/vals.length : null;
 
   function stat(l,v,n){ return '<div class="req"><div class="r-label">'+l+'</div><div class="r-value num">'+v+'</div>' +
     (n?'<div style="font-size:11px;color:var(--muted);margin-top:4px">'+n+'</div>':'') + '</div>'; }
+  var distStat = stat('広義人員 確認済み市の中央値', med===null?'算出不能':fmt(med)+'<span class="of">人</span>',
+    mean===null?'確認済みの市がない':'平均 '+fmt(mean,1)+'人（確認済み '+known.length+'市 / 全'+STATE.muni.length+'市）');
 
+  var f = focusRow();
+  if(!f){
+    box.innerHTML = '<div class="reqgrid">' + distStat + '</div>' +
+      '<p class="hint">ページ上部の「注目する市」で<b>市を選択すると相対的位置を確認できます</b>。</p>' +
+      '<p class="hint">比較方法：総務省の広義人員（DX・情報関係業務担当職員数）は、値が確認できた市の中で多い順の位置と、' +
+      '確認済み市の中央値・平均値を示す。人口1万人あたり・職員100人あたりは分母が取得できた場合のみ算出する。' +
+      '組織類型と実装成果スコア（未確認率つき）は全市共通の分類・採点結果をそのまま示す。' +
+      '<b>未取得値は「不明」「算出不能」とし、0で補完しない。</b>どの市を選んでも評価・統計処理は変わらない。</p>';
+    return;
+  }
+
+  /* 同値は同順位（多い順）。値が欠損の市は順位付けしない */
+  var rankTxt;
+  if(f._dxinfo === null){
+    rankTxt = '総務省値 未取得のため相対的位置は算出不能';
+  }else{
+    var above = vals.filter(function(v){ return v > f._dxinfo; }).length;
+    var tie   = vals.filter(function(v){ return v === f._dxinfo; }).length;
+    rankTxt = '確認済み' + known.length + '市中 多い方から' + (above+1) + '番目' +
+      (tie > 1 ? '（同数' + tie + '市）' : '') + '／中央値' +
+      (f._dxinfo > med ? 'より多い' : (f._dxinfo < med ? 'より少ない' : 'と同じ'));
+  }
   var org = ORG_GROUPS.filter(function(g){ return g.id === f._orgGroup; })[0];
-  document.getElementById('focusBox').innerHTML =
+  var ratioNote = function(v, denomMissing){
+    if(v !== null) return '';
+    return f._dxinfo === null ? '広義人員が未取得のため算出不能' : denomMissing + 'が未取得のため算出不能';
+  };
+  var same = names(function(r){ return r._orgGroup === f._orgGroup && !isFocus(r); });
+
+  box.innerHTML =
+    '<p class="focushead"><span class="chip focus">選択中</span> <b>' + esc(f._name) + '</b>' +
+      '<span class="tmeta">団体コード ' + esc(txt(f.municipality_code)) + '</span></p>' +
     '<div class="reqgrid">' +
-      stat('DX・情報関係業務担当職員数', (f._dxinfo===null?'不明':fmt(f._dxinfo)+'<span class="of">人</span>'),
-           f._dxinfo===null?'総務省値':'確定'+known.length+'市中 '+rank+'番目（多い順）') +
-      stat('確定11市中の中央値', fmt(med)+'<span class="of">人</span>', '平均 '+fmt(mean,1)+'人（n='+known.length+'）') +
-      stat('人口1万人あたり', (f._dxinfoPer10k===null?'不明':fmt(f._dxinfoPer10k,2)), f._dxinfoPer10k===null?'人口が未取得のため算出不能':'') +
-      stat('職員100人あたり', (f._dxinfoPer100===null?'不明':fmt(f._dxinfoPer100,2)), f._dxinfoPer100===null?'総職員数が未取得のため算出不能':'') +
-      stat('DX専任組織', (org?org.name:'不明'), esc(txt(f.dedicated_dx_org))) +
-      stat('実装成果スコア', fmt(f._impl,1)+'<span class="of"> / '+fmt(f._implMax,0)+'</span>', '未確認率 '+fmt(f._implRate,1)+'%') +
+      stat('DX・情報関係業務担当職員数', (f._dxinfo===null?'不明':fmt(f._dxinfo)+'<span class="of">人</span>'), rankTxt) +
+      distStat +
+      stat('人口1万人あたり', (f._dxinfoPer10k===null?'算出不能':fmt(f._dxinfoPer10k,2)), ratioNote(f._dxinfoPer10k,'人口')) +
+      stat('職員100人あたり', (f._dxinfoPer100===null?'算出不能':fmt(f._dxinfoPer100,2)), ratioNote(f._dxinfoPer100,'総職員数')) +
+      stat('DX専管組織・組織類型', (org?org.name:'不明'), esc(txt(f.dedicated_dx_org)) + '／' + FUNC_LABEL[f._funcType]) +
+      stat('実装成果スコア', (f._impl===null?'不明':fmt(f._impl,1)+'<span class="of"> / '+fmt(f._implMax,0)+'</span>'),
+           '未確認率 '+(f._implRate===null?'不明':fmt(f._implRate,1)+'%')+'（主分析 '+esc(txt(f.impl_main_analysis_eligible))+'）') +
     '</div>' +
 
-    '<p class="hint">' + esc(FOCUS_CITY) + 'は「' + (org?org.name:'不明') + '」かつ「' + FUNC_LABEL[f._funcType] + '」。' +
-    'DX専管組織を置かず情報政策課（ＩＴ推進係・システム管理係）が所掌しているため、' +
-    '広義人員' + (f._dxinfo===null?'':fmt(f._dxinfo)+'人') + 'のうちDX企画に充てられる人数は本数値からは分からない。' +
-    '同型（情報政策部署が兼務）は' + joinNames(names(function(r){ return r._orgGroup===f._orgGroup && !r._isFocus; })) + '。' +
-    '<b>これは順位付けを目的とした表示ではなく、人員配置を検討するための相対的位置の確認である。</b></p>';
+    '<p class="hint">' + esc(f._name) + 'のDX担当部署は「' + esc(txt(f.dx_department)) + '」、情報政策担当は「' +
+    esc(txt(f.info_policy_department)) + '」で、「' + (org?org.name:'不明') + '」かつ「' + FUNC_LABEL[f._funcType] + '」に分類される。' +
+    FUNC_NOTE[f._funcType] +
+    (same.length ? '同じ区分（' + (org?org.name:'不明') + '）の市は' + joinNames(same) + '。' : '') +
+    '<b>これは順位付けを目的とした表示ではなく、県内での相対的位置の確認である。</b></p>';
 }
 
 /* ---------- 7. 事前登録ペア比較 ---------- */
@@ -902,12 +1037,14 @@ function renderPairs(){
   var html = PRESET_PAIRS.map(function(p){
     var a = by[p.a], b = by[p.b];
     if(!a || !b) return '';
-    var feat = p.featured;
-    return '<div class="pair' + (feat?' featured':'') + '">' +
+    /* 選択市を含むペアは枠と見出しで強調するだけで、並び順・組み合わせは変えない */
+    var fa = isFocus(a), fb = isFocus(b), feat = fa || fb;
+    function th(r, f){ return '<th' + (f ? ' class="is-focus"' : '') + '>' + esc(r._name) + '</th>'; }
+    return '<div class="pair' + (feat?' is-focus':'') + '">' +
       '<div class="phead"><b>' + esc(p.a) + '</b> ⇔ <b>' + esc(p.b) + '</b>' +
-      (feat ? ' <span class="chip focus">人員配置検討の主要比較</span>' : '') +
+      (feat ? ' <span class="chip focus">選択中の市を含む</span>' : '') +
       '<span class="pnote">' + esc(p.note) + '</span></div>' +
-      '<table><thead><tr><th>指標</th><th>' + esc(p.a) + '</th><th>' + esc(p.b) + '</th></tr></thead><tbody>' +
+      '<table><thead><tr><th>指標</th>' + th(a, fa) + th(b, fb) + '</tr></thead><tbody>' +
       '<tr><td>人口</td>' + cell(a,'_pop',0,'人') + cell(b,'_pop',0,'人') + '</tr>' +
       '<tr><td>DX・情報関係業務担当職員数</td>' + cell(a,'_dxinfo',0,'人') + cell(b,'_dxinfo',0,'人') + '</tr>' +
       '<tr><td>人口1万人あたり</td>' + cell(a,'_dxinfoPer10k',2) + cell(b,'_dxinfoPer10k',2) + '</tr>' +
@@ -940,9 +1077,9 @@ function renderTypology(){
       '<span class="gname">' + g.name + '</span><span class="gcount num">' + rows.length + '市</span>' +
       '<span class="gdesc">' + g.desc + '</span></div><div class="cards">' +
       rows.map(function(r){
-        return '<div class="card' + (r._isFocus && STATE.focusOn ? ' is-focus' : '') + '">' +
+        return '<div class="card' + (isFocus(r) ? ' is-focus' : '') + '">' +
           '<div class="cname">' + esc(r._name) +
-            (r._isFocus && STATE.focusOn ? ' <span class="chip focus">本庁</span>' : '') +
+            (isFocus(r) ? ' <span class="chip focus">選択中</span>' : '') +
             confChip(r.dx_department_confidence) + '</div>' +
           '<div class="cdept">' + esc(txt(r.dx_department)) + '</div>' +
           '<div class="cmeta"><span class="chip">' + esc(txt(r.org_hierarchy)) + '</span>' +
@@ -951,7 +1088,7 @@ function renderTypology(){
           '</div>' +
           '<div class="cstat">広義人員 <b class="num">' + (r._dxinfo===null?'不明':fmt(r._dxinfo)+'人') + '</b>' +
           '　実装成果 <b class="num">' + fmt(r._impl,1) + '</b>/' + fmt(r._implMax,0) + '</div>' +
-          '<details><summary>詳細</summary><dl>' +
+          '<details data-key="org:' + esc(r._name) + '"><summary>詳細</summary><dl>' +
             '<dt>情報政策担当</dt><dd>' + esc(txt(r.info_policy_department)) + '</dd>' +
             '<dt>業務改善担当</dt><dd>' + esc(txt(r.bpr_department)) + '</dd>' +
             '<dt>設置時期</dt><dd>' + esc(txt(r.dx_org_established)) + '</dd>' +
@@ -976,15 +1113,14 @@ function renderTypology(){
   if(ocEl){
     ocEl.innerHTML = '<table><thead><tr><th class="stick">観点</th>' +
       STATE.muni.map(function(r){
-        return '<th' + (r._isFocus && STATE.focusOn ? ' class="is-focus"' : '') + '>' + esc(r._name) + '</th>';
+        return '<th' + (isFocus(r) ? ' class="is-focus"' : '') + '>' + esc(r._name) + '</th>';
       }).join('') + '</tr></thead><tbody>' +
       OC.map(function(c){
         return '<tr><td class="stick">' + c.label + '</td>' +
           STATE.muni.map(function(r){
             var v = c.get(r);
-            return '<td' + (isMissing(v) ? ' class="missing"' : '') +
-                   (r._isFocus && STATE.focusOn ? ' style="background:var(--focus-bg,#fff8e6)"' : '') +
-                   '>' + esc(v) + '</td>';
+            var cls = (isMissing(v) ? 'missing' : '') + (isFocus(r) ? ' is-focus' : '');
+            return '<td' + (cls ? ' class="' + cls.trim() + '"' : '') + '>' + esc(v) + '</td>';
           }).join('') + '</tr>';
       }).join('') + '</tbody></table>';
   }
@@ -1023,9 +1159,6 @@ function renderTable(){
       .forEach(function(o){ var e = document.createElement('option'); e.value = o[0]; e.textContent = o[1]; filter.appendChild(e); });
     filter.addEventListener('change', renderTable);
     search.addEventListener('input', renderTable);
-    document.getElementById('focusToggle').addEventListener('change', function(e){
-      STATE.focusOn = e.target.checked; renderAll();
-    });
   }
   var q = search.value.trim(), f = filter.value;
   var rows = STATE.muni.filter(function(r){
@@ -1052,7 +1185,7 @@ function renderTable(){
     return '<th class="sortable' + (c.stick?' stick':'') + '" data-key="' + k + '">' + c.label + ar + '</th>';
   }).join('') + '</tr>';
   document.getElementById('tbody').innerHTML = rows.map(function(r){
-    return '<tr' + (r._isFocus && STATE.focusOn ? ' class="is-focus"' : '') + '>' + COLUMNS.map(function(c){
+    return focusTr(r) + COLUMNS.map(function(c){
       var v = r[c.key];
       if(c.type === 'num') return '<td class="n' + (v===null?' missing':'') + '">' + (v===null?'不明':fmt(v,c.digits)) + '</td>';
       if(c.type === 'conf') return '<td>' + confChip(v) + '</td>';
@@ -1096,7 +1229,7 @@ function renderCoverage(){
   document.getElementById('covbody').innerHTML = STATE.muni.map(function(r){
     var ev = evidenceFor(r._name);
     var ab = ev.filter(function(e){ return e.confidence === 'A' || e.confidence === 'B'; }).length;
-    return '<tr' + (r._isFocus && STATE.focusOn ? ' class="is-focus"' : '') + '>' +
+    return focusTr(r) +
       '<td class="stick">' + esc(r._name) + '</td>' +
       COV_FIELDS.map(function(f){ return '<td class="cell">' + (f.test(r) ? '<span class="dot y">確認済</span>' : '<span class="dot n">未確認</span>') + '</td>'; }).join('') +
       '<td class="cell">' + (ab>0 ? '<span class="dot y">' + ab + '件</span>' : '<span class="dot n">0件</span>') + '</td>' +
@@ -1134,9 +1267,9 @@ function renderEvidence(){
     var list = evidenceFor(name);
     if(!list.length) return '';
     var ab = list.filter(function(e){ return e.confidence==='A'||e.confidence==='B'; }).length;
-    var focus = (name === FOCUS_CITY && STATE.focusOn);
-    return '<details class="ev"' + (focus?' style="border-color:var(--focus)"':'') + '><summary>' + esc(name) +
-      (focus?' <span class="chip focus">本庁</span>':'') +
+    var f = focusRow(), focus = !!(f && f._name === name);
+    return '<details class="ev' + (focus?' is-focus':'') + '" data-key="ev:' + esc(name) + '"><summary>' + esc(name) +
+      (focus?' <span class="chip focus">選択中</span>':'') +
       '<span class="evcount">根拠 ' + list.length + '件（うち確度A・B ' + ab + '件）</span></summary>' +
       '<table><thead><tr><th>項目</th><th>値</th><th>出典</th><th>確度</th><th>検証状態</th></tr></thead><tbody>' +
       list.map(function(e){

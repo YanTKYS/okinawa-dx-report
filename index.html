@@ -17,22 +17,29 @@
       <b>人員データ基準日：2024年4月1日（総務省）／DX推進度評価時点：2026年9月15日（約2年のラグ分析）</b>
       <span class="no-print">　表示内容は <code>data/</code> 配下のCSVから自動生成</span>
     </p>
+    <p class="sub print-only" id="focusPrint"></p>
   </div>
 </header>
 
 <nav class="toc no-print">
+  <div class="tocbar">
   <ol>
     <li><a href="#s-summary">1. 結論</a></li>
     <li><a href="#s-staff">2. 人的体制</a></li>
     <li><a href="#s-score">3. DX推進度</a></li>
     <li><a href="#s-analysis">4. 相関分析</a></li>
-    <li><a href="#s-focus">5. 糸満市の位置</a></li>
+    <li><a href="#s-focus">5. 選択市の位置</a></li>
     <li><a href="#s-pairs">6. 類似規模市の比較</a></li>
     <li><a href="#s-typology">7. 組織類型</a></li>
     <li><a href="#s-table">8. 市別比較表</a></li>
     <li><a href="#s-cov">9. データ充足度</a></li>
     <li><a href="#s-ev">10. 根拠資料</a></li>
   </ol>
+  <div class="focuspick" id="focusPick" title="選択した市を各セクションで強調表示します。並び順・評価・統計処理は変わりません。">
+    <label for="focusSel">注目する市</label>
+    <select id="focusSel"><option value="">全市（強調なし）</option></select>
+  </div>
+  </div>
 </nav>
 
 <main class="wrap">
@@ -61,8 +68,8 @@
       <p class="lede">主分析は総務省の共通指標（広義）。補助分析は自治体公表資料から職務別に分離できた狭義の人数。<b>両者は定義が異なるため合算・比較しない。</b></p>
 
       <h3>主指標：DX・情報関係業務担当職員数（総務省・広義・2024年4月1日）</h3>
-      <p class="hint no-print">総務省調査における「DX推進担当課室・情報政策担当課室」の合計人数。DX専任人数ではない。
-        <label class="toggle" style="margin-left:14px"><input type="checkbox" id="focusToggle" checked> 糸満市を強調表示</label></p>
+      <p class="hint">総務省調査における「DX推進担当課室・情報政策担当課室」の合計人数。DX専任人数ではない。
+        <span class="no-print">ページ上部の「注目する市」で選んだ市の行を強調表示する（並び順は変わらない）。</span></p>
       <div class="tablewrap" id="staffMain"></div>
 
       <h3>補助指標：職務別に分離できた狭義の人数（自治体公表組織図）</h3>
@@ -127,15 +134,15 @@
 
     <!-- 5 --------------------------------------------------------------- -->
     <section id="s-focus">
-      <h2><span class="idx">5</span>糸満市の相対的位置</h2>
-      <p class="lede">順位付けが目的ではなく、県内での相対的位置の確認。評価ロジックは他市と同一で、糸満市だけを有利・不利に扱う処理はしていない。</p>
+      <h2><span class="idx">5</span>選択市の相対的位置</h2>
+      <p class="lede">順位付けが目的ではなく、県内での相対的位置の確認。評価ロジックは全市共通で、「注目する市」の選択は強調表示にのみ用い、選択した市を有利・不利に扱う処理はしていない。</p>
       <div id="focusBox"></div>
     </section>
 
     <!-- 6 --------------------------------------------------------------- -->
     <section id="s-pairs">
       <h2><span class="idx">6</span>類似規模市の比較</h2>
-      <p class="lede">methodology §9.6 で事前登録した比較ペア。結果に合わせて組み替えていない。</p>
+      <p class="lede">methodology §9.6 で事前登録した比較ペア。結果に合わせて組み替えていない。4組はすべて同じ位置づけで、「注目する市」を含むペアだけを枠で強調する。</p>
       <div id="pairs"></div>
     </section>
 
@@ -155,7 +162,7 @@
       <h2><span class="idx">8</span>市別比較表</h2>
       <p class="lede">列見出しをクリックで並べ替え。「不明」は欠損として扱い、0とは区別して常に末尾に配置する。</p>
       <div class="controls no-print">
-        <div><label for="tsearch">市名・部署名検索</label><input type="search" id="tsearch" placeholder="例：糸満"></div>
+        <div><label for="tsearch">市名・部署名検索</label><input type="search" id="tsearch" placeholder="市名・部署名を入力"></div>
         <div><label for="tfilter">絞り込み</label><select id="tfilter"></select></div>
       </div>
       <div class="tablewrap"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
