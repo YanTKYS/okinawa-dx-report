@@ -5,7 +5,7 @@
   各itemのpoints <= max_points ／ 21項目合計100点 ／ raw一致 ／ adjusted一致
   確認済み0点を未確認扱いしていない ／ 未確認率一致 ／ 30%閾値判定一致
   dx_info_staff と dx_staff の混入なし ／ Pearson・Spearman再計算一致
-  同順位処理 ／ n・除外数一致 ／ 糸満市だけ特別な評価分岐がない
+  同順位処理 ／ n・除外数一致 ／ 特定の市だけ特別な評価分岐がない（注目する市は閲覧者が選択）
 """
 import csv, io, math, os, sys, re
 ROOT=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -406,10 +406,35 @@ check('総合DXスコアを主分析に使わない旨がUIに明示されてい
 check('index.html に実装成果スコアの定義が書かれている',
       'II 行政手続DX' in html and 'IV-2' in html and '60点' in html)
 
-print('\n[12] 糸満市に特別扱いが無い')
-check('糸満市だけ評価ロジックを変える分岐が無い（JS）',
-      js.count('FOCUS_CITY')>0 and '_isFocus' in js and
-      not re.search(r'_isFocus[^\n]*(points|score|\+=|weight)', js))
+print('\n[12] 特定の市に特別扱いが無い（注目する市は閲覧者が選択）')
+check('強調表示する市をJSに固定していない（FOCUS_CITY・_isFocus の廃止）',
+      'FOCUS_CITY' not in js and '_isFocus' not in js and 'function isFocus(' in js)
+check('注目する市の判定を評価・統計ロジックに使っていない（JS）',
+      not re.search(r'isFocus\([^\n]*(points|\+=|weight|pearson|spearman|fisherCI|pairsFor)', js) and
+      'isFocus' not in js[js.index('function pairsFor('):js.index('function strengthWord(')])
+# PRESET_PAIRS 以外に市名を直書きしていない
+js_wo_pairs=js[:js.index('var PRESET_PAIRS')]+js[js.index('var STATE'):]
+check('JSに糸満市の直書きが PRESET_PAIRS 以外に無い', '糸満市' not in js_wo_pairs)
+check('事前登録ペア4組が変更されていない',
+      re.findall(r"\{a:'([^']+)',\s*b:'([^']+)'", js)==
+      [('糸満市','豊見城市'),('沖縄市','うるま市'),('浦添市','宜野湾市'),('石垣市','宮古島市')],
+      str(re.findall(r"\{a:'([^']+)',\s*b:'([^']+)'", js)))
+check('比較ペアに特別扱い（featured・人員配置検討の主要比較）が無い',
+      'featured' not in js and '人員配置検討' not in js+html)
+m_sel=re.search(r'<select id="focusSel">(.*?)</select>', html, re.S)
+check('「注目する市」セレクトがあり、初期値は全市（強調なし）、市の選択肢はCSVから生成',
+      bool(m_sel) and m_sel.group(1).count('<option')==1 and 'value=""' in m_sel.group(1) and
+      '全市（強調なし）' in m_sel.group(1) and not any(c in m_sel.group(1) for c in CITIES) and
+      'STATE.muni.forEach' in js[js.index('function initFocusPicker('):])
+check('旧「糸満市を強調表示」チェックボックスが廃止されている',
+      'focusToggle' not in html+js and '糸満市を強調表示' not in html)
+check('特定市を前提にした表示文言（本庁・利用主体・糸満市の位置）が無い',
+      not any(k in html+js for k in ['本庁','利用主体','糸満市の相対的位置','糸満市の位置']))
+check('相対的位置セクションが選択市向けに汎用化されている',
+      '選択市の相対的位置' in html and '市を選択すると' in js)
+check('URLの city パラメータ（自治体コード）で選択状態を共有できる',
+      "FOCUS_PARAM = 'city'" in js and 'pushState' in js and 'popstate' in js and
+      'searchParams.delete(FOCUS_PARAM)' in js and 'u.hash' in js)
 fa=txt('tools/scoring_facts.py'); ba=txt('tools/build_analysis.py')
 check('採点ロジックに糸満市専用の分岐が無い',
       not re.search(r"if\s+.*==\s*'糸満市'.*:\s*\n\s+.*points", fa+ba))
