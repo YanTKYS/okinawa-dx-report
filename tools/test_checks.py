@@ -403,6 +403,17 @@ check('被説明変数に実装成果スコアと総合DXスコアの2層があ�
       '実装成果スコア' in js and '総合DXスコア' in js and 'OUTCOMES' in js)
 check('総合DXスコアを主分析に使わない旨がUIに明示されている',
       '構成概念が重複' in js or '構成概念の重複' in js)
+check('解釈に重要な注意（未確認≠未実施・有意でない≠関係がない）が常時表示されている',
+      '未確認は「取り組んでいない」ことを意味しない' in html and
+      '有意でないことは「関係がない」ことを意味しない' in html)
+check('ファーストビューで主分析が判定不能であることと、その理由（データ不足）を示す',
+      '主分析では判定できない' in js and '判定に必要なデータが揃っていない' in js and '主分析の対' in js)
+check('並べ替えはキーボード操作できるボタンで、aria-sort を設定している',
+      'class="sortbtn"' in js and 'aria-sort' in js)
+check('本文へのスキップリンクとページ内目次がある',
+      'class="skip' in html and 'aria-label="ページ内目次"' in html)
+check('印刷時に展開式の補足説明を開いて出力する',
+      "'beforeprint'" in js and 'details.more' in js and '@media print' in txt('assets/style.css'))
 check('index.html に実装成果スコアの定義が書かれている',
       'II 行政手続DX' in html and 'IV-2' in html and '60点' in html)
 
